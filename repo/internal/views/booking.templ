@@ -1,0 +1,147 @@
+package views
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/harborworks/booking-hub/internal/domain"
+)
+
+func formatDateTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02 15:04 UTC")
+}
+
+func nextHourISO() string {
+	t := time.Now().UTC().Add(3 * time.Hour).Truncate(time.Hour)
+	return t.Format("2006-01-02T15:04")
+}
+
+func nextHourPlusISO() string {
+	t := time.Now().UTC().Add(4 * time.Hour).Truncate(time.Hour)
+	return t.Format("2006-01-02T15:04")
+}
+
+templ MyBookingsPage(username string, blacklisted bool, blReason string, bookings []domain.Booking) {
+	@Layout("My Bookings", username) {
+		<h2>My bookings</h2>
+		if blacklisted {
+			<div class="error">
+				<strong>Account is blacklisted.</strong> New booking requests are blocked.
+				if blReason != "" {
+					<br/>Reason: { blReason }
+				}
+			</div>
+		}
+		if len(bookings) == 0 {
+			<div class="empty">
+				No bookings yet. <a href="/bookings/new">Create one</a>.
+			</div>
+		} else {
+			<table>
+				<thead>
+					<tr>
+						<th>Resource</th>
+						<th>Start</th>
+						<th>End</th>
+						<th>Party</th>
+						<th>Status</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, b := range bookings {
+						<tr>
+							<td><code>{ b.ResourceID.String()[:8] }…</code></td>
+							<td>{ formatDateTime(b.StartTime) }</td>
+							<td>{ formatDateTime(b.EndTime) }</td>
+							<td>{ fmt.Sprintf("%d", b.PartySize) }</td>
+							<td><span class={ "badge", string(b.Status) }>{ string(b.Status) }</span></td>
+							<td class="actions">
+								if !b.Status.IsTerminal() {
+									for _, next := range domain.AllowedNext(b.Status) {
+										<button class="btn-inline" onclick={ transitionScript(b.ID.String(), string(next)) }>{ string(next) }</button>
+									}
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			<script>
+				function harborTransition(id, target) {
+					fetch('/api/bookings/' + id + '/transition', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ target_state: target }),
+					}).then(async (res) => {
+						if (res.ok) { location.reload(); return; }
+						const data = await res.json().catch(() => ({}));
+						alert('Transition failed: ' + (data.error || res.statusText));
+					});
+				}
+			</script>
+		}
+	}
+}
+
+script transitionScript(id, target string) {
+	harborTransition(id, target);
+}
+
+templ NewBookingPage(username string, resources []domain.Resource, errMsg string) {
+	@Layout("New Booking", username) {
+		<h2>New booking</h2>
+		if errMsg != "" {
+			<div class="error">{ errMsg }</div>
+		}
+		<div class="card" style="max-width:560px;">
+			<form class="stacked" id="newBookingForm">
+				<label>
+					Resource
+					<select name="resource_id" required>
+						for _, r := range resources {
+							<option value={ r.ID.String() }>{ r.Name } — { r.Description }</option>
+						}
+					</select>
+				</label>
+				<label>
+					Start time (UTC)
+					<input type="datetime-local" name="start_time" value={ nextHourISO() } required/>
+				</label>
+				<label>
+					End time (UTC)
+					<input type="datetime-local" name="end_time" value={ nextHourPlusISO() } required/>
+				</label>
+				<label>
+					Party size
+					<input type="number" name="party_size" min="1" value="1" required/>
+				</label>
+				<label>
+					Notes
+					<textarea name="notes" rows="2"></textarea>
+				</label>
+				<button type="submit">Create booking</button>
+			</form>
+			<p class="muted" style="margin-top:1rem;">
+				Bookings need at least 2 hours lead time. Resource conflicts are
+				automatically waitlisted.
+			</p>
+		</div>
+		<script>
+			document.getElementById('newBookingForm').addEventListener('submit', async (e) => {
+				e.preventDefault();
+				const fd = new FormData(e.target);
+				const body = Object.fromEntries(fd.entries());
+				body.party_size = parseInt(body.party_size, 10);
+				const res = await fetch('/api/bookings', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(body),
+				});
+				if (res.ok) { window.location.href = '/'; return; }
+				const data = await res.json().catch(() => ({}));
+				alert('Booking failed: ' + (data.error || res.statusText));
+			});
+		</script>
+	}
+}

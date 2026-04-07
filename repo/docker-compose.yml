@@ -1,0 +1,80 @@
+name: harborworks
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: harborworks-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: harbor
+      POSTGRES_PASSWORD: harbor_secret
+      POSTGRES_DB: harborworks
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - harborworks_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harbor -d harborworks"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - harborworks_net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: harborworks/app:latest
+    container_name: harborworks-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      APP_PORT: "8080"
+      APP_HOST: 0.0.0.0
+      LOG_LEVEL: info
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: harbor
+      DB_PASSWORD: harbor_secret
+      DB_NAME: harborworks
+      DB_SSLMODE: disable
+      DB_MAX_CONNS: "10"
+      RUN_MIGRATIONS: "true"
+      RUN_SEED: "true"
+    ports:
+      - "8088:8080"
+    healthcheck:
+      test: ["CMD", "/app/server", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    volumes:
+      # Locally managed AES master key (auto-generated on first boot)
+      - harborworks_keys:/app/keys
+      # "Removable media" backup target
+      - harborworks_backups:/backups
+      # Offline file-based exchange directory (drop CSV/JSON files here)
+      - harborworks_exchange:/exchange
+    networks:
+      - harborworks_net
+
+networks:
+  harborworks_net:
+    driver: bridge
+
+volumes:
+  harborworks_pgdata:
+    driver: local
+  harborworks_keys:
+    driver: local
+  harborworks_backups:
+    driver: local
+  harborworks_exchange:
+    driver: local

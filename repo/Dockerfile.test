@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1.6
+
+# Single-stage test image: golang base so we can build a cover-instrumented
+# binary, then run `go test` for both unit and API suites in the same
+# container. The container is meant to be run via docker compose, against the
+# `db` service on the test network.
+
+FROM golang:1.23-alpine
+
+RUN apk add --no-cache bash git ca-certificates curl file
+
+WORKDIR /src
+
+# Install templ generator first so it's cached.
+RUN go install github.com/a-h/templ/cmd/templ@v0.2.778
+
+COPY . .
+
+# Generate templ Go files BEFORE go mod tidy so the views package is visible.
+RUN templ generate && go mod tidy
+
+# Cover-instrumented server binary. -coverpkg=./... captures the entire
+# module so the API tests can later filter coverage by package.
+RUN CGO_ENABLED=0 go build -cover -coverpkg=./... \
+    -o /usr/local/bin/server-cover ./cmd/server
+
+# Migrations and seed need to live where main.go expects them.
+RUN mkdir -p /app/migrations /app/seed /app/keys /backups /exchange && \
+    cp -r /src/migrations/* /app/migrations/ && \
+    cp -r /src/seed/* /app/seed/ && \
+    chmod -R 777 /app/keys /backups
+
+COPY tests/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

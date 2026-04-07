@@ -1,0 +1,81 @@
+package views
+
+import (
+	"fmt"
+	"github.com/harborworks/booking-hub/internal/domain"
+)
+
+templ GroupIndex(username string, groups []domain.GroupReservation) {
+	@Layout("Group Reservations", username) {
+		<h2>Group reservations</h2>
+		if len(groups) == 0 {
+			<div class="empty">No groups yet. Use <code>POST /api/groups</code> to create one.</div>
+		} else {
+			<table>
+				<thead>
+					<tr>
+						<th>Name</th>
+						<th>Organizer</th>
+						<th>Email</th>
+						<th>Capacity</th>
+						<th>Notes</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, g := range groups {
+						<tr>
+							<td>{ g.Name }</td>
+							<td>{ g.OrganizerName }</td>
+							<td>{ g.OrganizerEmail }</td>
+							<td>{ fmt.Sprintf("%d", g.Capacity) }</td>
+							<td>{ g.Notes }</td>
+							<td><a href={ templ.SafeURL("/groups/" + g.ID.String()) }>view</a></td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+templ GroupDetail(username string, g domain.GroupReservation) {
+	@Layout("Group: " + g.Name, username) {
+		<h2>{ g.Name }</h2>
+		<p class="muted">Organized by { g.OrganizerName } &lt;{ g.OrganizerEmail }&gt;</p>
+		<p>
+			<strong>Capacity:</strong> { fmt.Sprintf("%d", g.Capacity) } &middot;
+			<strong>Booked headcount:</strong> { fmt.Sprintf("%d", g.CurrentHeadcount()) }
+		</p>
+		if g.Notes != "" {
+			<p><em>{ g.Notes }</em></p>
+		}
+		<h3>Bookings linked to this group</h3>
+		if len(g.Bookings) == 0 {
+			<div class="empty">No bookings linked to this group yet.</div>
+		} else {
+			<table>
+				<thead>
+					<tr>
+						<th>Resource</th>
+						<th>Start</th>
+						<th>End</th>
+						<th>Party</th>
+						<th>Status</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, b := range g.Bookings {
+						<tr>
+							<td><code>{ b.ResourceID.String()[:8] }…</code></td>
+							<td>{ formatDateTime(b.StartTime) }</td>
+							<td>{ formatDateTime(b.EndTime) }</td>
+							<td>{ fmt.Sprintf("%d", b.PartySize) }</td>
+							<td><span class={ "badge", string(b.Status) }>{ string(b.Status) }</span></td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}

@@ -1,0 +1,8 @@
+BEGIN;
+DROP TABLE IF EXISTS bookings;
+DROP TABLE IF EXISTS group_reservations;
+DROP TABLE IF EXISTS resources;
+DROP TABLE IF EXISTS captcha_challenges;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS users;
+COMMIT;

@@ -1,0 +1,71 @@
+package views
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/harborworks/booking-hub/internal/domain"
+	"github.com/harborworks/booking-hub/internal/service"
+)
+
+func formatTimeRange(start, end time.Time) string {
+	return fmt.Sprintf("%s — %s", start.Format("15:04"), end.Format("15:04"))
+}
+
+func todayISO() string { return time.Now().UTC().Format("2006-01-02") }
+
+templ AvailabilityPage(username string, resources []domain.Resource, result *service.AvailabilityResult) {
+	@Layout("Availability", username) {
+		<h2>Availability search</h2>
+		<div class="card">
+			<form class="stacked" method="GET" action="/availability">
+				<label>
+					Resource
+					<select name="resource_id" required>
+						for _, r := range resources {
+							<option value={ r.ID.String() }>{ r.Name }</option>
+						}
+					</select>
+				</label>
+				<label>
+					Date
+					<input type="date" name="date" value={ todayISO() } required/>
+				</label>
+				<button type="submit">Search</button>
+			</form>
+		</div>
+		if result != nil {
+			<h3>{ result.Resource.Name } · { result.Date }</h3>
+			<p class="muted">{ result.Resource.Description }</p>
+			<h4>Free windows (08:00–22:00 UTC)</h4>
+			if len(result.Free) == 0 {
+				<div class="empty">Fully booked.</div>
+			} else {
+				<table>
+					<thead><tr><th>Window</th></tr></thead>
+					<tbody>
+						for _, w := range result.Free {
+							<tr><td>{ formatTimeRange(w.StartTime, w.EndTime) }</td></tr>
+						}
+					</tbody>
+				</table>
+			}
+			<h4 style="margin-top:1.5rem;">Already booked</h4>
+			if len(result.Booked) == 0 {
+				<div class="empty">No bookings on this date.</div>
+			} else {
+				<table>
+					<thead><tr><th>Window</th><th>Status</th></tr></thead>
+					<tbody>
+						for _, b := range result.Booked {
+							<tr>
+								<td>{ formatTimeRange(b.StartTime, b.EndTime) }</td>
+								<td><span class={ "badge", string(b.Status) }>{ string(b.Status) }</span></td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		}
+	}
+}

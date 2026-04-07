@@ -1,0 +1,17 @@
+.git
+.gitignore
+.gitattributes
+.idea
+.vscode
+.claude
+*.md.bak
+*~
+*.swp
+*.tmp
+*.log
+*.out
+*.cov
+bin/
+tmp/
+out/
+coverage/

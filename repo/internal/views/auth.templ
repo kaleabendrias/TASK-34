@@ -1,0 +1,118 @@
+package views
+
+templ RegisterPage(errMsg string) {
+	@Layout("Register", "") {
+		<div class="card" style="max-width:520px;">
+			<h2>Create an account</h2>
+			if errMsg != "" {
+				<div class="error">{ errMsg }</div>
+			}
+			<p class="muted">
+				Password policy: at least 12 characters, including an uppercase letter,
+				a lowercase letter, a digit, and a symbol.
+			</p>
+			<form class="stacked" id="registerForm">
+				<label>
+					Username
+					<input name="username" autocomplete="username" required/>
+				</label>
+				<label>
+					Password
+					<input type="password" name="password" autocomplete="new-password" required/>
+				</label>
+				<button type="submit">Register</button>
+			</form>
+			<p class="muted" style="margin-top:1rem;">Already have an account? <a href="/auth/login">Log in</a>.</p>
+		</div>
+		<script>
+			document.getElementById('registerForm').addEventListener('submit', async (e) => {
+				e.preventDefault();
+				const form = e.target;
+				const body = {
+					username: form.username.value,
+					password: form.password.value,
+				};
+				const res = await fetch('/api/auth/register', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(body),
+				});
+				if (res.ok) {
+					window.location.href = '/auth/login';
+					return;
+				}
+				const data = await res.json().catch(() => ({}));
+				alert('Registration failed: ' + (data.error || res.statusText));
+			});
+		</script>
+	}
+}
+
+templ LoginPage(errMsg, captchaToken, captchaQuestion string) {
+	@Layout("Log in", "") {
+		<div class="card" style="max-width:520px;">
+			<h2>Log in</h2>
+			if errMsg != "" {
+				<div class="error">{ errMsg }</div>
+			}
+			<form class="stacked" id="loginForm">
+				<label>
+					Username
+					<input name="username" autocomplete="username" required/>
+				</label>
+				<label>
+					Password
+					<input type="password" name="password" autocomplete="current-password" required/>
+				</label>
+				<div id="captchaWrap" class={ captchaWrapClass(captchaToken) }>
+					<label>
+						<span id="captchaQuestion">{ captchaQuestion }</span>
+						<input name="captcha_answer" id="captchaAnswer"/>
+					</label>
+					<input type="hidden" name="captcha_token" id="captchaToken" value={ captchaToken }/>
+				</div>
+				<button type="submit">Log in</button>
+			</form>
+			<p class="muted" style="margin-top:1rem;">No account? <a href="/auth/register">Register</a>.</p>
+		</div>
+		<script>
+			const form = document.getElementById('loginForm');
+			function showCaptcha(token, question) {
+				document.getElementById('captchaWrap').style.display = 'block';
+				document.getElementById('captchaToken').value = token || '';
+				document.getElementById('captchaQuestion').textContent = question || '';
+				document.getElementById('captchaAnswer').value = '';
+			}
+			form.addEventListener('submit', async (e) => {
+				e.preventDefault();
+				const body = {
+					username:       form.username.value,
+					password:       form.password.value,
+					captcha_token:  form.captcha_token ? form.captcha_token.value : '',
+					captcha_answer: form.captcha_answer ? form.captcha_answer.value : '',
+				};
+				const res = await fetch('/api/auth/login', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(body),
+				});
+				if (res.ok) {
+					window.location.href = '/';
+					return;
+				}
+				const data = await res.json().catch(() => ({}));
+				if (data.captcha_token) {
+					showCaptcha(data.captcha_token, data.captcha_question);
+				}
+				alert('Login failed: ' + (data.error || res.statusText));
+			});
+		</script>
+	}
+}
+
+func captchaWrapClass(token string) string {
+	if token == "" {
+		return "captcha-hidden"
+	}
+	return "captcha-visible"
+}

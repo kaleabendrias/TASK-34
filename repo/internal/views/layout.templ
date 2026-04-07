@@ -1,0 +1,103 @@
+package views
+
+templ Layout(title string, username string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{ title } — HarborWorks</title>
+			<style>
+				:root { --bg:#0b1d2a; --fg:#f3f7fa; --accent:#2bb3c0; --card:#15324a; --muted:#9fb4c7; --err:#ff8a8a; --ok:#7ee2a8; }
+				* { box-sizing: border-box; }
+				body { margin:0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); }
+				header { background: var(--card); padding: 1rem 2rem; display:flex; justify-content:space-between; align-items:center; border-bottom: 2px solid var(--accent); flex-wrap:wrap; gap:1rem; }
+				header h1 { margin:0; font-size:1.2rem; letter-spacing:0.5px; }
+				header nav a { color: var(--fg); margin-left: 1.2rem; text-decoration:none; font-weight:500; font-size:0.95rem; }
+				header nav a:hover { color: var(--accent); }
+				.userbox { color: var(--muted); font-size:0.9rem; }
+				.userbox strong { color: var(--fg); }
+				main { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+				h2 { color: var(--accent); margin-top: 0; }
+				h3 { color: var(--accent); }
+				table { width:100%; border-collapse: collapse; background: var(--card); border-radius:8px; overflow:hidden; }
+				th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid #1f4865; }
+				th { background:#11283b; color: var(--muted); text-transform: uppercase; font-size: 0.75rem; }
+				tr:last-child td { border-bottom: none; }
+				.badge { display:inline-block; padding:0.15rem 0.6rem; border-radius:999px; font-size:0.7rem; text-transform:uppercase; }
+				.badge.pending_confirmation { background:#5b3a00; color:#ffcb6b; }
+				.badge.waitlisted { background:#4a2e66; color:#cfa3ff; }
+				.badge.checked_in { background:#0a4a2c; color:#7ee2a8; }
+				.badge.completed { background:#1c3a5b; color:#9ec5ff; }
+				.badge.canceled { background:#5a1f1f; color:#ff8a8a; }
+				.empty { padding: 2rem; text-align: center; color: var(--muted); background: var(--card); border-radius:8px; }
+				.card { background: var(--card); border-radius:8px; padding:1.5rem; margin-bottom:1.5rem; }
+				form.stacked { display: grid; gap: 0.8rem; max-width: 480px; }
+				form.stacked label { display: grid; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); }
+				form.stacked input, form.stacked select, form.stacked textarea {
+					background:#0b1d2a; color:var(--fg); border:1px solid #2a4a68; border-radius:6px; padding:0.55rem 0.7rem; font-size:1rem;
+				}
+				form.stacked button {
+					background: var(--accent); color:#062028; border:none; border-radius:6px; padding:0.7rem 1rem; font-weight:600; cursor:pointer; font-size:1rem;
+				}
+				form.stacked button:hover { filter: brightness(1.1); }
+				.error { background: #3a1414; border-left: 3px solid var(--err); padding: 0.6rem 1rem; border-radius: 4px; color: var(--err); margin-bottom: 1rem; }
+				.warn  { background: #3a2914; border-left: 3px solid #ffcb6b; padding: 0.6rem 1rem; border-radius: 4px; color: #ffcb6b; margin-bottom: 1rem; }
+				.ok    { background: #143a24; border-left: 3px solid var(--ok); padding: 0.6rem 1rem; border-radius: 4px; color: var(--ok); margin-bottom: 1rem; }
+				footer { text-align:center; padding:2rem; color: var(--muted); font-size:0.85rem; }
+				.muted { color: var(--muted); }
+				a { color: var(--accent); }
+				.btn-inline { display:inline-block; padding:0.25rem 0.6rem; border-radius:4px; background:#1f4865; color:var(--fg); text-decoration:none; font-size:0.8rem; margin-right:0.25rem; border:none; cursor:pointer; font-family:inherit; }
+				.btn-inline:hover { background: var(--accent); color:#062028; }
+				.actions form { display:inline; }
+				.captcha-hidden { display: none; }
+				.captcha-visible { display: block; }
+			</style>
+		</head>
+		<body>
+			<header>
+				<h1>HarborWorks Booking & Group Reservation Hub</h1>
+				<nav>
+					<a href="/">My Bookings</a>
+					<a href="/availability">Availability</a>
+					<a href="/bookings/new">New Booking</a>
+					<a href="/groups">Groups</a>
+					if username != "" {
+						<span class="userbox">Signed in as <strong>{ username }</strong></span>
+						<form method="POST" action="/api/auth/logout" style="display:inline;margin-left:1rem;">
+							<button class="btn-inline" type="submit">Log out</button>
+						</form>
+					} else {
+						<a href="/auth/login">Log in</a>
+						<a href="/auth/register">Register</a>
+					}
+				</nav>
+			</header>
+			<main>
+				{ children... }
+			</main>
+			<footer>HarborWorks · Go · Gin · Templ · PostgreSQL</footer>
+		</body>
+	</html>
+}
+
+templ LandingPage() {
+	@Layout("Welcome", "") {
+		<div class="card">
+			<h2>Welcome to HarborWorks</h2>
+			<p>Reserve slips, moorings, and event spaces at the harbor.</p>
+			<p>
+				<a href="/auth/register">Create an account</a> ·
+				<a href="/auth/login">Log in</a> ·
+				<a href="/availability">Browse availability</a>
+			</p>
+			<h3>Booking rules</h3>
+			<ul class="muted">
+				<li>New bookings require at least 2 hours lead time.</li>
+				<li>Changes and cancellations lock 10 minutes before start.</li>
+				<li>Maximum 3 active bookings per day per account.</li>
+				<li>Overlapping bookings are not permitted for the same user.</li>
+			</ul>
+		</div>
+	}
+}
