@@ -119,25 +119,36 @@ func Idempotency(repo repository.IdempotencyRepository) gin.HandlerFunc {
 		}
 
 		// First time we see this key. Capture the response and persist it
-		// once the handler returns. Make sure the pending reservation is
-		// either promoted (success) or released (panic / no response) so
-		// the key never gets stuck.
+		// once the handler returns.
+		//
+		// Durability contract (audit: "durable failure"): the pending
+		// reservation is only released on handler panic, where we assume
+		// the side effect did not commit cleanly. If the handler returns
+		// normally but persisting the finalized response fails — for
+		// example because the database connection dropped between the
+		// handler's own transaction commit and our idempotency upsert —
+		// we deliberately LEAVE the pending row in place. Retries with
+		// the same key will see the stuck pending row and receive 409
+		// Retry-After until the 24h TTL expires. That trades the rare
+		// stuck key for a hard at-most-once guarantee: side effects must
+		// not run twice even if the final persistence write was
+		// interrupted.
 		cw := &captureWriter{ResponseWriter: c.Writer, status: http.StatusOK}
 		c.Writer = cw
 
-		completed := false
 		defer func() {
-			if !completed {
-				// Handler panicked or never wrote a response — drop the
-				// pending row so the client can safely retry.
+			if r := recover(); r != nil {
+				// Handler panicked — release the pending reservation so
+				// the client can safely retry after the crash is fixed.
 				_ = repo.ReleasePending(ctx, userID, key)
+				panic(r) // re-raise so Gin's recovery middleware sees it
 			}
 		}()
 
 		c.Next()
 
-		if err := repo.Complete(ctx, userID, key, cw.status, cw.buf.Bytes(), cw.Header().Get("Content-Type")); err == nil {
-			completed = true
-		}
+		// Best-effort finalization. A failure here intentionally does
+		// NOT release the pending reservation — see the contract above.
+		_ = repo.Complete(ctx, userID, key, cw.status, cw.buf.Bytes(), cw.Header().Get("Content-Type"))
 	}
 }

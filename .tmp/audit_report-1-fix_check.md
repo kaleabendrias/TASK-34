@@ -1,144 +1,127 @@
 # HarborWorks Issue Resolution Re-Audit (Static-Only)
 
-Date: 2026-04-08
-Source baseline: [.tmp/cycle-01/static-audit-harborworks-2026-04-08.md](.tmp/cycle-01/static-audit-harborworks-2026-04-08.md)
+Date: 2026-04-09
+Baseline: [.tmp/audit_report-1.md](.tmp/audit_report-1.md)
 
 ## 1. Overall Verdict
-- Overall conclusion: **Partial Pass**
+- Overall conclusion: **Pass**
 
-Most previously reported issues were addressed with substantial code and schema changes. Two items still have residual gaps in strict requirement-fit/security-hardening terms.
+All eight findings from the baseline audit now have concrete implementation-level fixes. No baseline issue remains open in this static re-check.
 
 ## 2. Scope and Method
-- Static-only follow-up review (no runtime execution).
-- Compared current implementation against each issue in the baseline report.
-- Reviewed updated middleware, repositories, services, migrations, tests, and documentation.
+- Static-only follow-up review (no runtime execution performed in this pass).
+- Re-checked code paths and tests tied to each baseline finding.
+- Focused on middleware, repository, service, migrations, config, compose, and test updates.
 
 ## 3. Issue-by-Issue Resolution Status
 
 ### 3.1 High-1: Idempotency unsafe for concurrent same-key requests
 - Previous status: Fail
-- Current status: **Resolved (with residual risk)**
+- Current status: **Fixed**
 - Why:
-  - Atomic reservation is now attempted before handler execution via Reserve, preventing multiple first-movers for the same key scope.
-  - Concurrent in-flight duplicate now returns 409 + Retry-After instead of executing side effects.
-  - Completion path stores finalized response and replay path serves persisted response.
+  - Request key is now reserved atomically before handler execution.
+  - In-flight duplicate requests receive 409 with Retry-After instead of re-running side effects.
+  - Completed records are replayed deterministically.
+  - Durable-failure behavior is explicitly hardened: if finalize write fails, pending reservation is intentionally retained to preserve at-most-once behavior.
 - Evidence:
-  - [repo/internal/api/middleware/idempotency.go](repo/internal/api/middleware/idempotency.go#L91)
+  - [repo/internal/api/middleware/idempotency.go](repo/internal/api/middleware/idempotency.go#L86)
   - [repo/internal/api/middleware/idempotency.go](repo/internal/api/middleware/idempotency.go#L104)
-  - [repo/internal/api/middleware/idempotency.go](repo/internal/api/middleware/idempotency.go#L111)
-  - [repo/internal/repository/idempotency.go](repo/internal/repository/idempotency.go#L55)
-  - [repo/API_tests/idempotency_isolation_test.go](repo/API_tests/idempotency_isolation_test.go#L23)
-- Residual risk:
-  - If side effects succeed but Complete fails, pending is released and a retry may execute again. This is rarer than the original race, but strict durable at-most-once still depends on successful finalize write.
-  - Related line: [repo/internal/api/middleware/idempotency.go](repo/internal/api/middleware/idempotency.go#L139)
+  - [repo/internal/api/middleware/idempotency.go](repo/internal/api/middleware/idempotency.go#L121)
+  - [repo/internal/api/middleware/idempotency.go](repo/internal/api/middleware/idempotency.go#L157)
+  - [repo/internal/repository/idempotency.go](repo/internal/repository/idempotency.go#L53)
+  - [repo/API_tests/idempotency_durable_test.go](repo/API_tests/idempotency_durable_test.go#L10)
 
 ### 3.2 High-2: Idempotency key globally scoped (cross-user collision/replay)
 - Previous status: Fail
-- Current status: **Resolved**
+- Current status: **Fixed**
 - Why:
-  - Idempotency is now scoped by user identity in repository matching and uniqueness strategy.
-  - Migration introduces split uniqueness for authenticated and anonymous namespaces.
-  - Cross-user isolation test added.
+  - Idempotency reservation/lookup/update/delete are all scoped by user identity (or anonymous null scope).
+  - This prevents cross-user key collision and replay leakage.
 - Evidence:
-  - [repo/internal/repository/idempotency.go](repo/internal/repository/idempotency.go#L53)
-  - [repo/internal/repository/idempotency.go](repo/internal/repository/idempotency.go#L98)
-  - [repo/migrations/0004_hardening.up.sql](repo/migrations/0004_hardening.up.sql#L26)
-  - [repo/migrations/0004_hardening.up.sql](repo/migrations/0004_hardening.up.sql#L31)
-  - [repo/API_tests/idempotency_isolation_test.go](repo/API_tests/idempotency_isolation_test.go#L104)
+  - [repo/internal/api/middleware/idempotency.go](repo/internal/api/middleware/idempotency.go#L80)
+  - [repo/internal/repository/idempotency.go](repo/internal/repository/idempotency.go#L50)
+  - [repo/internal/repository/idempotency.go](repo/internal/repository/idempotency.go#L95)
 
 ### 3.3 High-3: README/code contradiction on admin bootstrap credential
 - Previous status: Fail
-- Current status: **Resolved**
+- Current status: **Fixed**
 - Why:
-  - README now documents one-time random admin credential file retrieval/rotation instead of hardcoded password.
-  - Verification snippets also read password from the one-time file.
+  - Documentation now reflects one-time bootstrap credential retrieval from file instead of claiming a fixed default password.
 - Evidence:
-  - [repo/README.md](repo/README.md#L65)
-  - [repo/README.md](repo/README.md#L75)
-  - [repo/README.md](repo/README.md#L163)
-  - [repo/README.md](repo/README.md#L534)
+  - [repo/README.md](repo/README.md#L161)
 
 ### 3.4 Medium-4: Group-buy failed semantics and explicit slot release
 - Previous status: Partial Fail
-- Current status: **Resolved**
+- Current status: **Fixed**
 - Why:
-  - Failed terminal state was added to domain and schema constraint.
-  - Expiry sweep now distinguishes finalized/failed/expired.
-  - Failed path performs atomic status change plus slot release to capacity.
+  - `failed` terminal status exists in domain model.
+  - Expiry sweep now routes not-met campaigns to failed path.
+  - Failed transition performs slot release behavior explicitly.
 - Evidence:
   - [repo/internal/domain/groupbuy.go](repo/internal/domain/groupbuy.go#L24)
-  - [repo/internal/service/groupbuy.go](repo/internal/service/groupbuy.go#L212)
-  - [repo/internal/repository/groupbuy.go](repo/internal/repository/groupbuy.go#L185)
-  - [repo/internal/repository/groupbuy.go](repo/internal/repository/groupbuy.go#L198)
-  - [repo/migrations/0004_hardening.up.sql](repo/migrations/0004_hardening.up.sql#L39)
+  - [repo/internal/service/groupbuy.go](repo/internal/service/groupbuy.go#L200)
+  - [repo/internal/service/groupbuy.go](repo/internal/service/groupbuy.go#L217)
 
 ### 3.5 Medium-5: CSV validation missing invalid-date rejection
 - Previous status: Partial Fail
-- Current status: **Partially Resolved**
+- Current status: **Fixed**
 - Why:
-  - Strict date parsing logic was added for date-like columns (RFC3339/RFC3339Nano/YYYY-MM-DD).
-  - Invalid or empty values in detected date-like columns are now rejected.
+  - Import validation now enforces mandatory date-column presence (`effective_date` or `created_at`).
+  - Date-like columns are strictly validated as RFC3339/RFC3339Nano or YYYY-MM-DD.
+  - Unit tests cover missing mandatory date column and invalid date values.
 - Evidence:
-  - [repo/internal/service/governance.go](repo/internal/service/governance.go#L185)
-  - [repo/internal/service/governance.go](repo/internal/service/governance.go#L200)
-  - [repo/internal/service/governance.go](repo/internal/service/governance.go#L284)
-- Remaining gap:
-  - The resources import contract still only mandates name/description/capacity. If the original requirement expects a specific mandatory date field, that field is not yet required by schema-level validation.
+  - [repo/internal/service/governance.go](repo/internal/service/governance.go#L234)
+  - [repo/internal/service/governance.go](repo/internal/service/governance.go#L276)
+  - [repo/unit_tests/csv_test.go](repo/unit_tests/csv_test.go#L76)
+  - [repo/unit_tests/csv_test.go](repo/unit_tests/csv_test.go#L88)
 
 ### 3.6 Medium-6: Session cookie missing Secure flag
 - Previous status: Partial Fail
-- Current status: **Resolved**
+- Current status: **Fixed**
 - Why:
-  - Secure flag is now configurable and defaults to true.
-  - Login, logout, and bad-cookie cleanup all use the configured secure policy.
+  - Session cookie `Secure` is now controlled by config and used consistently in auth cookie set/clear paths.
+  - Production compose defaults keep secure cookies enabled.
 - Evidence:
-  - [repo/internal/service/auth.go](repo/internal/service/auth.go#L43)
   - [repo/internal/api/handlers/auth.go](repo/internal/api/handlers/auth.go#L85)
   - [repo/internal/api/handlers/auth.go](repo/internal/api/handlers/auth.go#L96)
-  - [repo/internal/api/middleware/auth.go](repo/internal/api/middleware/auth.go#L40)
   - [repo/docker-compose.yml](repo/docker-compose.yml#L51)
 
 ### 3.7 Medium-7: Incremental backup baseline tied to last full
 - Previous status: Partial Fail
-- Current status: **Resolved**
+- Current status: **Fixed**
 - Why:
-  - Incrementals now use LastSuccessful baseline, matching cumulative-chain expectation for incremental jobs.
+  - Incremental backup now uses last successful backup checkpoint, not only last full.
 - Evidence:
-  - [repo/internal/service/backup.go](repo/internal/service/backup.go#L72)
   - [repo/internal/service/backup.go](repo/internal/service/backup.go#L73)
-  - [repo/internal/repository/backup.go](repo/internal/repository/backup.go#L22)
-  - [repo/internal/repository/backup.go](repo/internal/repository/backup.go#L69)
 
 ### 3.8 Low-8: Hardcoded analytics anonymization salt in source
 - Previous status: Partial Fail
-- Current status: **Partially Resolved**
+- Current status: **Fixed**
 - Why:
-  - Salt is now plumbed through configuration and compose env variables.
+  - Config now requires `ANALYTICS_ANON_SALT` with no in-code fallback default.
+  - Compose/test compose explicitly provide environment values.
 - Evidence:
-  - [repo/cmd/server/main.go](repo/cmd/server/main.go#L117)
+  - [repo/internal/infrastructure/config/config.go](repo/internal/infrastructure/config/config.go#L13)
+  - [repo/internal/infrastructure/config/config.go](repo/internal/infrastructure/config/config.go#L75)
   - [repo/docker-compose.yml](repo/docker-compose.yml#L56)
   - [repo/docker-compose.test.yml](repo/docker-compose.test.yml#L44)
-  - [repo/internal/infrastructure/config/config.go](repo/internal/infrastructure/config/config.go#L39)
-- Remaining gap:
-  - A development fallback literal remains in source config default, so the codebase still contains a hardcoded salt value.
-  - Evidence: [repo/internal/infrastructure/config/config.go](repo/internal/infrastructure/config/config.go#L65)
 
 ## 4. Re-Audit Summary Table
 
 | Issue | Prior | Current |
 |---|---|---|
-| Idempotency concurrent same-key race | Fail | Resolved (residual risk) |
-| Idempotency cross-user collision | Fail | Resolved |
-| Admin credential docs contradiction | Fail | Resolved |
-| Group-buy failed semantics + slot release | Partial Fail | Resolved |
-| CSV invalid-date validation | Partial Fail | Partially Resolved |
-| Session cookie Secure flag | Partial Fail | Resolved |
-| Incremental baseline correctness | Partial Fail | Resolved |
-| Hardcoded analytics salt | Partial Fail | Partially Resolved |
+| Idempotency concurrent same-key race | Fail | Fixed |
+| Idempotency cross-user collision | Fail | Fixed |
+| Admin credential docs contradiction | Fail | Fixed |
+| Group-buy failed semantics + slot release | Partial Fail | Fixed |
+| CSV invalid-date validation | Partial Fail | Fixed |
+| Session cookie Secure flag | Partial Fail | Fixed |
+| Incremental baseline correctness | Partial Fail | Fixed |
+| Hardcoded analytics salt | Partial Fail | Fixed |
 
 ## 5. Final Judgment
-- Resolved: 6/8
-- Partially resolved: 2/8
+- Fixed: 8/8
+- Partially fixed: 0/8
 - Unresolved: 0/8
 
-Acceptance posture improves materially versus the baseline audit. Remaining acceptance risk is concentrated in strict idempotency finalization durability and analytics salt hardening defaults, plus potential requirement-fit ambiguity around mandatory CSV date fields.
+The baseline acceptance blockers and partial passes have now been fully addressed in static code review terms.

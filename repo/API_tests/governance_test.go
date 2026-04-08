@@ -156,7 +156,7 @@ func TestGovernance_DeletionExecutorHardDeletes(t *testing.T) {
 func TestGovernance_CSVImportRejectsInvalidRows(t *testing.T) {
 	admin := loginAsAdmin(t)
 
-	csv := "name,description,capacity\n,nope,3\nBad,bad,abc\nDup,one,1\nDup,two,2\n"
+	csv := "name,description,capacity,effective_date\n,nope,3,2026-04-09\nBad,bad,abc,2026-04-09\nDup,one,1,2026-04-09\nDup,two,2,2026-04-09\n"
 	body, contentType := buildMultipart(t, "file", "bad.csv", []byte(csv))
 	resp, raw := admin.doRaw(t, "POST", "/api/admin/import/resources", body, map[string]string{
 		"Content-Type": contentType,
@@ -173,7 +173,7 @@ func TestGovernance_CSVImportAcceptsValidRows(t *testing.T) {
 	// not collide with previous insertions on the unique `name` index.
 	a := uniqueUsername("Good A")
 	b := uniqueUsername("Good B")
-	csv := "name,description,capacity\n" + a + ",desc,1\n" + b + ",desc,2\n"
+	csv := "name,description,capacity,effective_date\n" + a + ",desc,1,2026-04-09\n" + b + ",desc,2,2026-04-09\n"
 	body, contentType := buildMultipart(t, "file", "good.csv", []byte(csv))
 	resp, raw := admin.doRaw(t, "POST", "/api/admin/import/resources", body, map[string]string{
 		"Content-Type": contentType,
@@ -187,7 +187,7 @@ func TestGovernance_CSVImportAcceptsValidRows(t *testing.T) {
 // back (no rows inserted, fatal error returned).
 func TestGovernance_CSVImportRollsBackOnDBCollision(t *testing.T) {
 	admin := loginAsAdmin(t)
-	csv := "name,description,capacity\n" + uniqueUsername("Fresh A") + ",fresh,1\nSlip A1,collides with seed,1\n"
+	csv := "name,description,capacity,effective_date\n" + uniqueUsername("Fresh A") + ",fresh,1,2026-04-09\nSlip A1,collides with seed,1,2026-04-09\n"
 	body, contentType := buildMultipart(t, "file", "collide.csv", []byte(csv))
 	resp, raw := admin.doRaw(t, "POST", "/api/admin/import/resources", body, map[string]string{
 		"Content-Type": contentType,
@@ -212,7 +212,7 @@ func TestGovernance_CSVExportStreamsAttachment(t *testing.T) {
 
 func TestGovernance_NonAdminBlockedFromImport(t *testing.T) {
 	user, _ := registerAndLogin(t, "noadmcsv")
-	body, contentType := buildMultipart(t, "file", "x.csv", []byte("name,description,capacity\nx,y,1\n"))
+	body, contentType := buildMultipart(t, "file", "x.csv", []byte("name,description,capacity,effective_date\nx,y,1,2026-04-09\n"))
 	resp, _ := user.doRaw(t, "POST", "/api/admin/import/resources", body, map[string]string{
 		"Content-Type": contentType,
 	})

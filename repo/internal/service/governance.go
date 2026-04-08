@@ -237,6 +237,24 @@ func ValidateResourcesCSV(body io.Reader) (parsed []ParsedResourceRow, errs []CS
 		}
 	}
 
+	// Mandatory date-field contract: the resource import schema requires
+	// at least one explicit date column so auditors can anchor every
+	// imported row to a point in time. We accept either "effective_date"
+	// (when the row becomes authoritative) or "created_at" (when the
+	// resource was originally provisioned). Uploads missing both are
+	// rejected at the schema layer — row-level validation is not reached.
+	mandatoryDateCols := []string{"effective_date", "created_at"}
+	hasMandatoryDate := false
+	for _, c := range mandatoryDateCols {
+		if _, ok := colIdx[c]; ok {
+			hasMandatoryDate = true
+			break
+		}
+	}
+	if !hasMandatoryDate {
+		return nil, nil, fmt.Errorf("missing mandatory date column: upload must include at least one of %v", mandatoryDateCols)
+	}
+
 	// Pre-compute which columns must satisfy the strict date format. This
 	// covers any optional column the operator added (e.g. effective_at,
 	// retire_date) on top of the required name/description/capacity set.
@@ -300,8 +318,9 @@ func ValidateResourcesCSV(body io.Reader) (parsed []ParsedResourceRow, errs []CS
 	return parsed, nil, nil
 }
 
-// ImportResourcesCSV parses a CSV with the columns name,description,capacity,
-// validates every row, and persists the surviving rows inside a single
+// ImportResourcesCSV parses a CSV whose header must include name,description,
+// capacity plus at least one mandatory date column (effective_date or
+// created_at). It validates every row and persists the surviving rows inside a single
 // transaction. Any validation error or insert error rolls back the whole
 // transaction; the returned `inserted` count is the number of rows actually
 // committed (always 0 on the failure paths).

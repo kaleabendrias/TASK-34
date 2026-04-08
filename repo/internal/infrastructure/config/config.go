@@ -1,12 +1,20 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 )
+
+// ErrMissingAnalyticsSalt is returned by Load when the analytics
+// anonymisation salt is not supplied via secure configuration. There is no
+// development fallback literal — every environment (prod, staging, test,
+// CI) must provide ANALYTICS_ANON_SALT explicitly or the server refuses
+// to start.
+var ErrMissingAnalyticsSalt = errors.New("ANALYTICS_ANON_SALT is required and has no default (set it via secure configuration, not via .env files)")
 
 // Config holds all runtime configuration loaded from environment variables.
 // Defaults are provided so the binary boots in any compose-managed container.
@@ -33,9 +41,11 @@ type Config struct {
 	CookieSecure bool
 
 	// AnalyticsAnonSalt is the per-deployment secret used to derive the
-	// hashed analytics user identifier. MUST be set in production via
-	// ANALYTICS_ANON_SALT. A development-only fallback is used if unset
-	// so unit tests can run without env wiring.
+	// hashed analytics user identifier. MUST be supplied via secure
+	// configuration (ANALYTICS_ANON_SALT env var injected by the
+	// orchestrator / secret store). There is NO development or unit-test
+	// fallback literal — Load() returns ErrMissingAnalyticsSalt when the
+	// value is absent, and every environment must provide it explicitly.
 	AnalyticsAnonSalt string
 }
 
@@ -62,7 +72,14 @@ func Load() (*Config, error) {
 	c.RunMigrations = parseBool(getenv("RUN_MIGRATIONS", "true"))
 	c.RunSeed = parseBool(getenv("RUN_SEED", "true"))
 	c.CookieSecure = parseBool(getenv("COOKIE_SECURE", "true"))
-	c.AnalyticsAnonSalt = getenv("ANALYTICS_ANON_SALT", "harborworks-dev-anon-salt")
+
+	// Strict: no default, no development fallback. If ANALYTICS_ANON_SALT
+	// is missing the server refuses to start so we can never accidentally
+	// ship a build that hashes PII under a well-known literal.
+	c.AnalyticsAnonSalt = strings.TrimSpace(os.Getenv("ANALYTICS_ANON_SALT"))
+	if c.AnalyticsAnonSalt == "" {
+		return nil, ErrMissingAnalyticsSalt
+	}
 
 	return c, nil
 }

@@ -8,9 +8,9 @@ import (
 )
 
 func TestValidateResourcesCSV_Success(t *testing.T) {
-	csv := `name,description,capacity
-Slip A1,North dock,1
-Slip A2,South dock,2
+	csv := `name,description,capacity,effective_date
+Slip A1,North dock,1,2026-04-09
+Slip A2,South dock,2,2026-04-09
 `
 	parsed, errs, fatal := service.ValidateResourcesCSV(strings.NewReader(csv))
 	if fatal != nil {
@@ -28,12 +28,12 @@ Slip A2,South dock,2
 }
 
 func TestValidateResourcesCSV_AllRowErrors(t *testing.T) {
-	csv := `name,description,capacity
-,no name,3
-Bad Capacity,desc,abc
-Negative,desc,-1
-Dup,one,2
-Dup,two,3
+	csv := `name,description,capacity,effective_date
+,no name,3,2026-04-09
+Bad Capacity,desc,abc,2026-04-09
+Negative,desc,-1,2026-04-09
+Dup,one,2,2026-04-09
+Dup,two,3,2026-04-09
 `
 	parsed, errs, fatal := service.ValidateResourcesCSV(strings.NewReader(csv))
 	if fatal != nil {
@@ -77,14 +77,35 @@ func TestValidateResourcesCSV_Errors(t *testing.T) {
 			t.Fatal("expected missing-column fatal")
 		}
 	})
+	t.Run("missing mandatory date column", func(t *testing.T) {
+		// Header has every other required column but neither
+		// effective_date nor created_at → schema-level reject.
+		_, _, fatal := service.ValidateResourcesCSV(strings.NewReader("name,description,capacity\nfoo,bar,1\n"))
+		if fatal == nil {
+			t.Fatal("expected fatal when no mandatory date column is present")
+		}
+		if !strings.Contains(fatal.Error(), "mandatory date column") {
+			t.Errorf("fatal should mention mandatory date column, got %v", fatal)
+		}
+	})
+	t.Run("mandatory date column present but row value invalid", func(t *testing.T) {
+		csv := "name,description,capacity,effective_date\nFoo,bar,1,not-a-date\n"
+		_, errs, fatal := service.ValidateResourcesCSV(strings.NewReader(csv))
+		if fatal != nil {
+			t.Fatalf("unexpected fatal: %v", fatal)
+		}
+		if len(errs) == 0 {
+			t.Fatal("expected row-level error for invalid effective_date value")
+		}
+	})
 	t.Run("malformed CSV", func(t *testing.T) {
-		_, _, fatal := service.ValidateResourcesCSV(strings.NewReader("name,description,capacity\n\"unterminated"))
+		_, _, fatal := service.ValidateResourcesCSV(strings.NewReader("name,description,capacity,effective_date\n\"unterminated"))
 		if fatal == nil {
 			t.Fatal("expected parse fatal")
 		}
 	})
 	t.Run("short row", func(t *testing.T) {
-		csv := "name,description,capacity\nshorty\n"
+		csv := "name,description,capacity,effective_date\nshorty\n"
 		_, errs, fatal := service.ValidateResourcesCSV(strings.NewReader(csv))
 		// CSV parser may return a fatal error for short rows; either fatal
 		// or a row-level error is acceptable.

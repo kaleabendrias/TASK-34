@@ -110,10 +110,8 @@ func main() {
 	notifSvc := service.NewNotificationService(notifRepo, logger)
 	groupBuySvc := service.NewGroupBuyService(groupBuyRepo, resourceRepo, userRepo, notifRepo, logger)
 	docSvc := service.NewDocumentService(docRepo, logger)
-	if cfg.AnalyticsAnonSalt == "" {
-		logger.Error("ANALYTICS_ANON_SALT is required in production")
-		os.Exit(1)
-	}
+	// config.Load() already guarantees AnalyticsAnonSalt is non-empty —
+	// it returns ErrMissingAnalyticsSalt otherwise and main() exits above.
 	analyticsSvc := service.NewAnalyticsService(analyticsRepo, cfg.AnalyticsAnonSalt, logger)
 	govSvc := service.NewGovernanceService(govRepo, userRepo, bookingRepo, resourceRepo, analyticsSvc, logger)
 	webhookSvc := service.NewWebhookService(webhookRepo, logger)
