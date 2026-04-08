@@ -37,7 +37,7 @@ func Authenticator(auth *service.AuthService, required bool) gin.HandlerFunc {
 		user, sess, err := auth.ResolveSession(c.Request.Context(), cookie)
 		if err != nil {
 			// Clear the bad cookie regardless.
-			clearCookie(c)
+			clearCookie(c, auth.Settings().CookieSecure)
 			if required {
 				switch {
 				case errors.Is(err, domain.ErrSessionExpired):
@@ -134,6 +134,6 @@ func isHTMLRoute(c *gin.Context) bool {
 	return c.Request.Method == http.MethodGet && (accept == "" || strings.Contains(accept, "text/html") || strings.Contains(accept, "*/*"))
 }
 
-func clearCookie(c *gin.Context) {
-	c.SetCookie(SessionCookieName, "", -1, "/", "", false, true)
+func clearCookie(c *gin.Context, secure bool) {
+	c.SetCookie(SessionCookieName, "", -1, "/", "", secure, true)
 }

@@ -16,7 +16,22 @@ const (
 	GroupBuyExpired   GroupBuyStatus = "expired"
 	GroupBuyCanceled  GroupBuyStatus = "canceled"
 	GroupBuyFinalized GroupBuyStatus = "finalized"
+	// GroupBuyFailed is the terminal state assigned when a campaign reaches
+	// its deadline with at least one participant but without meeting the
+	// threshold. The sweep job releases the pre-allocated resource slots
+	// (resets remaining_slots back to capacity) so the underlying resource
+	// can be re-used.
+	GroupBuyFailed GroupBuyStatus = "failed"
 )
+
+// IsTerminal reports whether the group buy can no longer accept joins.
+func (s GroupBuyStatus) IsTerminal() bool {
+	switch s {
+	case GroupBuyExpired, GroupBuyCanceled, GroupBuyFinalized, GroupBuyFailed:
+		return true
+	}
+	return false
+}
 
 // GroupBuy represents a session-anchored collective purchase. The threshold
 // is the minimum number of confirmed seats required for the group buy to be

@@ -62,17 +62,35 @@ All four volumes are managed by Docker. There are no `.env` files, no
 absolute host paths, and no dependency on locally installed Go, templ, or
 Postgres binaries.
 
-### Default credentials
+### Default administrator credential
 
 A default administrator is seeded on first boot if no user with that username
-exists; the credential is logged once and then never logged again:
+exists. To prevent the credential from leaking via source control, container
+images, or log scrapers, the password is **randomly generated** at first
+boot and written exactly once to a one-time secret file inside the container.
+Nothing about the plaintext is ever logged.
 
 ```
-username : harbormaster
-password : Harbor@Works2026!
+username           : harbormaster
+credential file    : /app/keys/initial_admin_password   (mode 0600)
+rotation required  : yes (must_rotate_password is set on first sign-in)
 ```
 
-Change it before exposing the stack to anything beyond a developer machine.
+Read it once, sign in, and immediately rotate via
+`POST /api/auth/change-password`. After rotating you should delete the
+file:
+
+```bash
+docker compose exec -T app cat /app/keys/initial_admin_password
+# log in, then:
+docker compose exec -T app rm -f /app/keys/initial_admin_password
+```
+
+The file lives on the `harborworks_keys` named volume so it survives
+container restarts until the operator removes it. The seeding logic is in
+`cmd/server/main.go` (`seedAdminUser`) — that function is the single
+source of truth for the credential path; this README intentionally does
+not embed any password literal.
 
 ---
 
@@ -139,10 +157,13 @@ curl -s -c $COOKAL -o /dev/null -w "%{http_code}\n" -X POST $HOST/api/auth/login
 # /api/auth/me confirms the session.
 curl -sf -b $COOKAL $HOST/api/auth/me | grep -q '"username":"alice"' && echo "✓ /api/auth/me returns alice"
 
-# Login as admin (used for the rest of the verification).
+# Login as admin (used for the rest of the verification). Read the random
+# one-time password file written by `seedAdminUser` on first boot. The
+# operator is expected to rotate it after this initial sign-in.
+ADMIN_PW=$(docker compose exec -T app cat /app/keys/initial_admin_password | tr -d '\r\n')
 curl -s -c $COOKADM -o /dev/null -X POST $HOST/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"harbormaster","password":"Harbor@Works2026!"}'
+  -d "{\"username\":\"harbormaster\",\"password\":\"$ADMIN_PW\"}"
 echo "✓ harbormaster logged in"
 ```
 
@@ -510,9 +531,10 @@ trigger them on demand:
 ```bash
 # As an admin user:
 COOK=/tmp/hw_admin.txt
+ADMIN_PW=$(docker compose exec -T app cat /app/keys/initial_admin_password | tr -d '\r\n')
 curl -s -c $COOK -o /dev/null -X POST http://localhost:8088/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"harbormaster","password":"Harbor@Works2026!"}'
+  -d "{\"username\":\"harbormaster\",\"password\":\"$ADMIN_PW\"}"
 
 # Take a full snapshot RIGHT NOW.
 curl -sf -b $COOK -X POST http://localhost:8088/api/admin/backups/full

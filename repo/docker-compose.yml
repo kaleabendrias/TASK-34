@@ -47,6 +47,13 @@ services:
       DB_MAX_CONNS: "10"
       RUN_MIGRATIONS: "true"
       RUN_SEED: "true"
+      # Set to "false" only when fronting the app over plain HTTP (e.g.
+      # local dev). Production deployments MUST keep Secure cookies on.
+      COOKIE_SECURE: "true"
+      # Per-deployment salt used to derive the analytics user_anon hash.
+      # Rotate via `docker compose up -d` after replacing this value;
+      # historical hashes will become un-correlatable, which is the goal.
+      ANALYTICS_ANON_SALT: "change-me-to-a-long-random-secret"
     ports:
       - "8088:8080"
     healthcheck:

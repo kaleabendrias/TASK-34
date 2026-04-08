@@ -176,6 +176,40 @@ type ParsedResourceRow struct {
 	Capacity    int
 }
 
+// isDateLikeColumn reports whether a header name is conventionally typed
+// as a date/time. The CSV importer rejects any value in such columns that
+// is not a strictly-parseable RFC3339 timestamp or YYYY-MM-DD calendar
+// date. This catches the common operator mistake of pasting an Excel
+// "general" cell ("4/8/2026", "Apr 8 2026", "1744070400") into what
+// should be an ISO timestamp column.
+func isDateLikeColumn(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return false
+	}
+	if n == "date" || strings.HasSuffix(n, "_at") || strings.HasSuffix(n, "_date") ||
+		strings.HasSuffix(n, "_time") || strings.HasPrefix(n, "date_") {
+		return true
+	}
+	return false
+}
+
+// validateDateField returns "" if value parses as either RFC3339 / RFC3339Nano
+// or as a bare YYYY-MM-DD calendar date. Otherwise it returns a human-readable
+// reason.
+func validateDateField(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return "required (RFC3339 or YYYY-MM-DD)"
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		if _, err := time.Parse(layout, v); err == nil {
+			return ""
+		}
+	}
+	return "must be RFC3339 or YYYY-MM-DD; got " + strconv.Quote(v)
+}
+
 // ValidateResourcesCSV is a pure function that performs all schema and row
 // checks for a resource CSV import. It is intentionally side-effect free so
 // unit tests can exercise every branch without a database. The contract is
@@ -200,6 +234,16 @@ func ValidateResourcesCSV(body io.Reader) (parsed []ParsedResourceRow, errs []CS
 	for _, c := range required {
 		if _, ok := colIdx[c]; !ok {
 			return nil, nil, fmt.Errorf("missing column %q", c)
+		}
+	}
+
+	// Pre-compute which columns must satisfy the strict date format. This
+	// covers any optional column the operator added (e.g. effective_at,
+	// retire_date) on top of the required name/description/capacity set.
+	dateCols := map[string]int{}
+	for h, idx := range colIdx {
+		if isDateLikeColumn(h) {
+			dateCols[h] = idx
 		}
 	}
 
@@ -230,6 +274,23 @@ func ValidateResourcesCSV(body io.Reader) (parsed []ParsedResourceRow, errs []CS
 			errs = append(errs, CSVValidationError{Row: i + 1, Field: "capacity", Reason: "must be a positive integer"})
 			continue
 		}
+
+		// Strict date validation: every column whose header looks like a
+		// timestamp/date must be a parseable RFC3339 value or a bare
+		// YYYY-MM-DD. Any other content is a hard reject — including
+		// empty strings, "TBD", numeric epochs, and locale-specific
+		// formats. This is a deliberate "strict-by-default" policy.
+		dateOK := true
+		for h, idx := range dateCols {
+			if reason := validateDateField(row[idx]); reason != "" {
+				errs = append(errs, CSVValidationError{Row: i + 1, Field: h, Reason: reason})
+				dateOK = false
+			}
+		}
+		if !dateOK {
+			continue
+		}
+
 		parsed = append(parsed, ParsedResourceRow{Name: name, Description: desc, Capacity: capVal})
 	}
 

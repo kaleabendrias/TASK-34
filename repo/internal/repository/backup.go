@@ -14,6 +14,12 @@ type BackupRepository interface {
 	Insert(ctx context.Context, b *domain.Backup) error
 	List(ctx context.Context, limit int) ([]domain.Backup, error)
 	LastFull(ctx context.Context) (*domain.Backup, error)
+	// LastSuccessful returns the most recent backup of any kind (full or
+	// incremental). The incremental scheduler uses this as its baseline so
+	// each new incremental only contains rows changed since the previous
+	// successful backup, instead of re-emitting everything since the last
+	// full snapshot.
+	LastSuccessful(ctx context.Context) (*domain.Backup, error)
 	IncrementalsAfter(ctx context.Context, after time.Time) ([]domain.Backup, error)
 }
 
@@ -58,6 +64,18 @@ func (r *backupRepo) List(ctx context.Context, limit int) ([]domain.Backup, erro
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+func (r *backupRepo) LastSuccessful(ctx context.Context) (*domain.Backup, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, kind, path, size_bytes, taken_at, detail
+		FROM backups ORDER BY taken_at DESC LIMIT 1
+	`)
+	var b domain.Backup
+	if err := row.Scan(&b.ID, &b.Kind, &b.Path, &b.SizeBytes, &b.TakenAt, &b.Detail); err != nil {
+		return nil, err
+	}
+	return &b, nil
 }
 
 func (r *backupRepo) LastFull(ctx context.Context) (*domain.Backup, error) {

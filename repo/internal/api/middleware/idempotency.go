@@ -27,9 +27,6 @@ type captureWriter struct {
 	status int
 }
 
-// Write is the only writer override we need; idempotency-wrapped handlers
-// in this codebase always serialize via c.JSON, which routes through Write.
-// The embedded gin.ResponseWriter supplies the rest of the interface.
 func (w *captureWriter) Write(b []byte) (int, error) {
 	w.buf.Write(b)
 	return w.ResponseWriter.Write(b)
@@ -41,10 +38,21 @@ func (w *captureWriter) WriteHeader(code int) {
 }
 
 // Idempotency wraps any side-effecting handler so retries with the same
-// `Idempotency-Key` header always resolve to the *same* response. The first
-// request executes the handler and persists the outcome; later requests with
-// the same key short-circuit and replay the stored bytes. If a request body
-// is reused with a different hash the request is rejected with 409.
+// `Idempotency-Key` header always resolve to the *same* response.
+//
+// At-most-once semantics are enforced via an atomic reservation: the first
+// request inserts a 'pending' row, runs the handler, then promotes the row
+// to 'completed' with the captured response. Concurrent requests with the
+// same key see the pending row and short-circuit with HTTP 409 — they may
+// retry once the original request settles. Subsequent requests see the
+// completed row and replay the stored bytes.
+//
+// Keys are scoped per (user_id, key). Two different users may submit the
+// same client-generated header value without colliding. Anonymous requests
+// (no session) share an isolated null-user namespace.
+//
+// If a request body is reused with a different hash the request is rejected
+// with 409 ErrIdempotencyMismatch.
 //
 // TTL: 24 hours, matching the default group-buy deadline.
 func Idempotency(repo repository.IdempotencyRepository) gin.HandlerFunc {
@@ -71,49 +79,65 @@ func Idempotency(repo repository.IdempotencyRepository) gin.HandlerFunc {
 		hash := sha256.Sum256(append([]byte(c.Request.Method+" "+c.Request.URL.Path+"?"), bodyBytes...))
 		hashStr := hex.EncodeToString(hash[:])
 
-		ctx := c.Request.Context()
-		if existing, err := repo.Get(ctx, key); err == nil {
-			if existing.RequestHash != hashStr {
-				c.AbortWithStatusJSON(http.StatusConflict, gin.H{
-					"error": "idempotency key reused with a different request body",
-				})
-				return
-			}
-			c.Header("Content-Type", existing.ContentType)
-			c.Header("Idempotent-Replay", "true")
-			c.Status(existing.StatusCode)
-			_, _ = c.Writer.Write(existing.ResponseBody)
-			c.Abort()
-			return
-		} else if !errors.Is(err, domain.ErrNotFound) {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "idempotency lookup failed"})
-			return
-		}
-
-		// First time we see this key. Capture the response and persist it
-		// once the handler returns.
-		cw := &captureWriter{ResponseWriter: c.Writer, status: http.StatusOK}
-		c.Writer = cw
-
-		// Stash the user id (if available) for the audit row.
+		// Scope every reservation to the authenticated user. Anonymous
+		// requests use a NULL user_id and live in their own namespace.
 		var userID *uuid.UUID
 		if u := CurrentUser(c); u != nil {
 			id := u.ID
 			userID = &id
 		}
 
+		ctx := c.Request.Context()
+		existing, reserved, err := repo.Reserve(ctx, userID, key, hashStr, ttl)
+		switch {
+		case err == nil && reserved:
+			// First-mover: own the slot, run the handler, capture the
+			// response, then promote the reservation to completed.
+		case errors.Is(err, domain.ErrIdempotencyMismatch):
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+				"error": "idempotency key reused with a different request body",
+			})
+			return
+		case errors.Is(err, domain.ErrConflict):
+			// A pending sibling holds the slot. Tell the client to retry
+			// once the in-flight request settles. 409 + Retry-After.
+			c.Header("Retry-After", "1")
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+				"error": "idempotency key is currently in flight, retry shortly",
+			})
+			return
+		case err == nil && existing != nil && existing.Status == domain.IdempotencyStatusCompleted:
+			c.Header("Content-Type", existing.ContentType)
+			c.Header("Idempotent-Replay", "true")
+			c.Status(existing.StatusCode)
+			_, _ = c.Writer.Write(existing.ResponseBody)
+			c.Abort()
+			return
+		default:
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "idempotency lookup failed"})
+			return
+		}
+
+		// First time we see this key. Capture the response and persist it
+		// once the handler returns. Make sure the pending reservation is
+		// either promoted (success) or released (panic / no response) so
+		// the key never gets stuck.
+		cw := &captureWriter{ResponseWriter: c.Writer, status: http.StatusOK}
+		c.Writer = cw
+
+		completed := false
+		defer func() {
+			if !completed {
+				// Handler panicked or never wrote a response — drop the
+				// pending row so the client can safely retry.
+				_ = repo.ReleasePending(ctx, userID, key)
+			}
+		}()
+
 		c.Next()
 
-		now := time.Now().UTC()
-		_ = repo.Put(ctx, &domain.IdempotencyRecord{
-			Key:          key,
-			UserID:       userID,
-			RequestHash:  hashStr,
-			StatusCode:   cw.status,
-			ResponseBody: cw.buf.Bytes(),
-			ContentType:  cw.Header().Get("Content-Type"),
-			CreatedAt:    now,
-			ExpiresAt:    now.Add(ttl),
-		})
+		if err := repo.Complete(ctx, userID, key, cw.status, cw.buf.Bytes(), cw.Header().Get("Content-Type")); err == nil {
+			completed = true
+		}
 	}
 }

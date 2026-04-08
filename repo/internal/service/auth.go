@@ -28,6 +28,7 @@ type AuthSettings struct {
 	CaptchaThreshold  int           // 2: failed attempts after which captcha is required
 	CaptchaTTL        time.Duration // 5m
 	BcryptCost        int           // 10–12 typical
+	CookieSecure      bool          // emit Secure flag on session cookies
 }
 
 func DefaultAuthSettings() AuthSettings {
@@ -39,6 +40,7 @@ func DefaultAuthSettings() AuthSettings {
 		CaptchaThreshold:   2,
 		CaptchaTTL:         5 * time.Minute,
 		BcryptCost:         bcrypt.DefaultCost,
+		CookieSecure:       true,
 	}
 }
 

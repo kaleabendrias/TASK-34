@@ -26,6 +26,17 @@ type Config struct {
 
 	RunMigrations bool
 	RunSeed       bool
+
+	// CookieSecure controls the Secure flag on session cookies. Defaults
+	// to true so production deployments are safe by default; tests/local
+	// development can opt out via COOKIE_SECURE=false.
+	CookieSecure bool
+
+	// AnalyticsAnonSalt is the per-deployment secret used to derive the
+	// hashed analytics user identifier. MUST be set in production via
+	// ANALYTICS_ANON_SALT. A development-only fallback is used if unset
+	// so unit tests can run without env wiring.
+	AnalyticsAnonSalt string
 }
 
 func Load() (*Config, error) {
@@ -50,6 +61,8 @@ func Load() (*Config, error) {
 
 	c.RunMigrations = parseBool(getenv("RUN_MIGRATIONS", "true"))
 	c.RunSeed = parseBool(getenv("RUN_SEED", "true"))
+	c.CookieSecure = parseBool(getenv("COOKIE_SECURE", "true"))
+	c.AnalyticsAnonSalt = getenv("ANALYTICS_ANON_SALT", "harborworks-dev-anon-salt")
 
 	return c, nil
 }

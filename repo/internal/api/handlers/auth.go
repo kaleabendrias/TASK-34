@@ -77,8 +77,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	maxAge := int(h.auth.Settings().SessionInactivity.Seconds())
-	c.SetCookie(middleware.SessionCookieName, res.Session.ID, maxAge, "/", "", false, true)
+	settings := h.auth.Settings()
+	maxAge := int(settings.SessionInactivity.Seconds())
+	// Secure flag is on by default; toggled off only via COOKIE_SECURE=false
+	// for plain-HTTP local development. HttpOnly is always true so the
+	// session id is never exposed to JavaScript.
+	c.SetCookie(middleware.SessionCookieName, res.Session.ID, maxAge, "/", "", settings.CookieSecure, true)
 	c.JSON(http.StatusOK, gin.H{
 		"user":               res.User,
 		"session_expires_at": res.Session.ExpiresAt,
@@ -89,7 +93,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	if cookie, err := c.Cookie(middleware.SessionCookieName); err == nil {
 		_ = h.auth.Logout(c.Request.Context(), cookie)
 	}
-	c.SetCookie(middleware.SessionCookieName, "", -1, "/", "", false, true)
+	c.SetCookie(middleware.SessionCookieName, "", -1, "/", "", h.auth.Settings().CookieSecure, true)
 	c.JSON(http.StatusOK, gin.H{"status": "logged_out"})
 }
 

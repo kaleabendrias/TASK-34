@@ -23,6 +23,10 @@ type GroupBuyRepository interface {
 	// ErrAlreadyJoined as appropriate.
 	JoinAtomic(ctx context.Context, gbID, userID uuid.UUID, qty int) (*domain.GroupBuy, *domain.GroupBuyParticipant, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.GroupBuyStatus) error
+	// MarkFailedAndReleaseSlots atomically sets the group buy to a failed
+	// terminal state AND resets remaining_slots back to capacity, so any
+	// pre-allocated seats are returned to the underlying resource.
+	MarkFailedAndReleaseSlots(ctx context.Context, id uuid.UUID) error
 	ListParticipants(ctx context.Context, gbID uuid.UUID) ([]domain.GroupBuyParticipant, error)
 	ListExpiringBefore(ctx context.Context, t time.Time) ([]domain.GroupBuy, error)
 }
@@ -176,6 +180,35 @@ func (r *groupBuyRepo) JoinAtomic(ctx context.Context, gbID, userID uuid.UUID, q
 		return nil, nil, err
 	}
 	return updated, part, nil
+}
+
+func (r *groupBuyRepo) MarkFailedAndReleaseSlots(ctx context.Context, id uuid.UUID) error {
+	// One transaction so the status flip and the slot release commit
+	// together. Without the BEGIN/COMMIT a crash between the two updates
+	// would leave the row "failed" but with seats still consumed.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin failed-release tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const upd = `
+		UPDATE group_buys
+		   SET status          = 'failed',
+		       remaining_slots = capacity,
+		       version         = version + 1,
+		       updated_at      = NOW()
+		 WHERE id = $1
+		   AND status IN ('open','met')
+	`
+	tag, err := tx.Exec(ctx, upd, id)
+	if err != nil {
+		return fmt.Errorf("mark failed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *groupBuyRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.GroupBuyStatus) error {

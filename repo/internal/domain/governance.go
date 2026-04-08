@@ -92,12 +92,19 @@ type Backup struct {
 // IdempotencyRecord persists the outcome of a side-effecting request so retries
 // resolve to the same response.
 type IdempotencyRecord struct {
-	Key          string    `json:"key"`
+	Key          string     `json:"key"`
 	UserID       *uuid.UUID `json:"user_id,omitempty"`
-	RequestHash  string    `json:"request_hash"`
-	StatusCode   int       `json:"status_code"`
-	ResponseBody []byte    `json:"-"`
-	ContentType  string    `json:"content_type"`
-	CreatedAt    time.Time `json:"created_at"`
-	ExpiresAt    time.Time `json:"expires_at"`
+	RequestHash  string     `json:"request_hash"`
+	StatusCode   int        `json:"status_code"`
+	ResponseBody []byte     `json:"-"`
+	ContentType  string     `json:"content_type"`
+	Status       string     `json:"status"`
+	CreatedAt    time.Time  `json:"created_at"`
+	ExpiresAt    time.Time  `json:"expires_at"`
 }
+
+// Idempotency record statuses.
+const (
+	IdempotencyStatusPending   = "pending"
+	IdempotencyStatusCompleted = "completed"
+)

@@ -183,8 +183,19 @@ func (s *GroupBuyService) Progress(ctx context.Context, id uuid.UUID) (*Progress
 }
 
 // SweepExpired is a job step: any open or met group buy whose deadline has
-// passed gets a terminal state assigned (finalized if threshold met, expired
-// otherwise) and the organizer is notified.
+// passed is moved to a terminal state. Three cases:
+//
+//   - threshold met         → finalized
+//   - threshold NOT met,
+//     at least one joiner   → failed (slots are released back to the
+//                             underlying resource so it can be re-used)
+//   - no participants       → expired
+//
+// In every case the organizer is notified. The "failed" path uses a
+// dedicated repository method that updates the status and resets
+// remaining_slots = capacity in a single transaction so the invariant
+// "a non-finalized terminal group buy holds zero pre-allocated seats"
+// always holds.
 func (s *GroupBuyService) SweepExpired(ctx context.Context) error {
 	now := time.Now().UTC()
 	expiring, err := s.repo.ListExpiringBefore(ctx, now)
@@ -194,13 +205,25 @@ func (s *GroupBuyService) SweepExpired(ctx context.Context) error {
 	for i := range expiring {
 		g := &expiring[i]
 		target := domain.GroupBuyExpired
-		if g.ThresholdMet() {
+		switch {
+		case g.ThresholdMet():
 			target = domain.GroupBuyFinalized
+		case g.Confirmed() > 0:
+			target = domain.GroupBuyFailed
 		}
-		if err := s.repo.UpdateStatus(ctx, g.ID, target); err != nil {
-			s.log.Warn("sweep update failed", "id", g.ID, "error", err)
-			continue
+
+		if target == domain.GroupBuyFailed {
+			if err := s.repo.MarkFailedAndReleaseSlots(ctx, g.ID); err != nil {
+				s.log.Warn("sweep release-and-fail failed", "id", g.ID, "error", err)
+				continue
+			}
+		} else {
+			if err := s.repo.UpdateStatus(ctx, g.ID, target); err != nil {
+				s.log.Warn("sweep update failed", "id", g.ID, "error", err)
+				continue
+			}
 		}
+
 		_ = s.notifications.CreateNotification(ctx, &domain.Notification{
 			UserID: g.OrganizerID,
 			Kind:   "group_buy_" + string(target),

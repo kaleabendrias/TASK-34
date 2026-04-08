@@ -101,14 +101,20 @@ func main() {
 	backupRepo := repository.NewBackupRepository(pool)
 
 	// --- Services ---
-	authSvc := service.NewAuthService(userRepo, sessionRepo, captchaRepo, logger, service.DefaultAuthSettings())
+	authSettings := service.DefaultAuthSettings()
+	authSettings.CookieSecure = cfg.CookieSecure
+	authSvc := service.NewAuthService(userRepo, sessionRepo, captchaRepo, logger, authSettings)
 	resourceSvc := service.NewResourceService(resourceRepo, bookingRepo, logger)
 	bookingSvc := service.NewBookingService(bookingRepo, resourceRepo, userRepo, keyMgr, logger, service.DefaultBookingPolicy())
 	groupSvc := service.NewGroupService(groupRepo, bookingRepo, logger)
 	notifSvc := service.NewNotificationService(notifRepo, logger)
 	groupBuySvc := service.NewGroupBuyService(groupBuyRepo, resourceRepo, userRepo, notifRepo, logger)
 	docSvc := service.NewDocumentService(docRepo, logger)
-	analyticsSvc := service.NewAnalyticsService(analyticsRepo, "harborworks-anon-salt", logger)
+	if cfg.AnalyticsAnonSalt == "" {
+		logger.Error("ANALYTICS_ANON_SALT is required in production")
+		os.Exit(1)
+	}
+	analyticsSvc := service.NewAnalyticsService(analyticsRepo, cfg.AnalyticsAnonSalt, logger)
 	govSvc := service.NewGovernanceService(govRepo, userRepo, bookingRepo, resourceRepo, analyticsSvc, logger)
 	webhookSvc := service.NewWebhookService(webhookRepo, logger)
 	backupSvc := service.NewBackupService(pool, backupRepo, "/backups", logger)

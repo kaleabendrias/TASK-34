@@ -62,9 +62,15 @@ func (s *BackupService) TakeFull(ctx context.Context) (*domain.Backup, error) {
 	return s.take(ctx, "full", time.Time{})
 }
 
-// TakeIncremental writes only rows whose updated_at > the previous backup.
+// TakeIncremental writes only rows whose updated_at is newer than the
+// previous successful backup. The baseline is the most recent backup of
+// either kind (full OR incremental) — using the last full snapshot as
+// the baseline would re-emit every row that already shipped in earlier
+// incrementals between fulls. Falls back to "no since" (full export) if
+// the table is empty so the very first incremental still produces a
+// usable file.
 func (s *BackupService) TakeIncremental(ctx context.Context) (*domain.Backup, error) {
-	last, err := s.repo.LastFull(ctx)
+	last, err := s.repo.LastSuccessful(ctx)
 	since := time.Time{}
 	if err == nil && last != nil {
 		since = last.TakenAt

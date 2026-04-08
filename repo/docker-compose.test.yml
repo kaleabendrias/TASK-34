@@ -40,6 +40,8 @@ services:
       RUN_MIGRATIONS: "true"
       RUN_SEED: "true"
       LOG_LEVEL: warn
+      COOKIE_SECURE: "false"
+      ANALYTICS_ANON_SALT: "test-only-anon-salt"
       UNIT_THRESHOLD: "${UNIT_THRESHOLD:-90.0}"
       API_THRESHOLD: "${API_THRESHOLD:-90.0}"
     networks:
