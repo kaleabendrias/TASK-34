@@ -56,6 +56,40 @@ func (h *ResourceHandler) Availability(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// GET /api/resources/:id/remaining?start=...&end=...
+// Returns the live remaining-seat count for a (resource, window) pair so
+// the booking form can quote a number before the user submits.
+func (h *ResourceHandler) RemainingSeats(c *gin.Context) {
+	rid, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id must be a UUID"})
+		return
+	}
+	start, err := time.Parse(time.RFC3339, c.Query("start"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "start must be RFC3339"})
+		return
+	}
+	end, err := time.Parse(time.RFC3339, c.Query("end"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "end must be RFC3339"})
+		return
+	}
+	cap, active, remaining, err := h.svc.RemainingSeats(c.Request.Context(), rid, start, end)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"resource_id":       rid,
+		"start":             start,
+		"end":               end,
+		"capacity":          cap,
+		"active_party_size": active,
+		"remaining_seats":   remaining,
+	})
+}
+
 // GET /availability (HTML)
 func (h *ResourceHandler) AvailabilityPage(c *gin.Context) {
 	resources, err := h.svc.List(c.Request.Context())

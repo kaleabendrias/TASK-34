@@ -46,7 +46,9 @@ func TestResources_ListAndAvailability(t *testing.T) {
 }
 
 func TestGroups_CRUD(t *testing.T) {
-	c := newClient(t)
+	// Group create now requires authentication so the organiser-of-record
+	// is recorded for PII masking gates.
+	c, _ := registerAndLogin(t, "groupcrud")
 
 	// Create
 	resp, body := c.doJSON(t, "POST", "/api/groups", map[string]any{

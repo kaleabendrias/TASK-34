@@ -89,6 +89,32 @@ func RequireNotBlacklisted() gin.HandlerFunc {
 	}
 }
 
+// RequirePasswordRotated blocks every endpoint except logout, /me, and the
+// change-password endpoint when the current user's must_rotate_password
+// flag is set. The seeded admin starts with this flag on so the operator
+// is forced to set a real password before doing anything else.
+func RequirePasswordRotated() gin.HandlerFunc {
+	const changePath = "/api/auth/change-password"
+	const logoutPath = "/api/auth/logout"
+	const mePath = "/api/auth/me"
+	return func(c *gin.Context) {
+		u := CurrentUser(c)
+		if u == nil || !u.MustRotatePassword {
+			c.Next()
+			return
+		}
+		switch c.Request.URL.Path {
+		case changePath, logoutPath, mePath:
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error": "password rotation required",
+			"hint":  "POST " + changePath + " with current_password + new_password",
+		})
+	}
+}
+
 func unauthorized(c *gin.Context, msg string) {
 	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": msg})
 }

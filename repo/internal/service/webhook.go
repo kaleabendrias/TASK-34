@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +23,95 @@ import (
 const (
 	WebhookMaxAttempts = 5
 )
+
+// AllowedWebhookCIDRs is the closed list of network ranges a webhook target
+// is allowed to resolve into. Anything outside is rejected at create time
+// AND again at delivery time as a defence-in-depth against TOCTOU.
+//
+// 127.0.0.0/8        loopback (incl. the docker host's lo)
+// 10.0.0.0/8         RFC 1918 private
+// 172.16.0.0/12      RFC 1918 private (default docker bridge subnet too)
+// 192.168.0.0/16     RFC 1918 private
+// 169.254.0.0/16     link-local (intentionally excluded — it would let a
+//                    target hit cloud metadata services; we omit it)
+// ::1/128            IPv6 loopback
+// fc00::/7           IPv6 unique local
+var AllowedWebhookCIDRs = []string{
+	"127.0.0.0/8",
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"::1/128",
+	"fc00::/7",
+}
+
+// AllowedWebhookHostnames are friendly names that always resolve. The
+// docker-compose network gives services hostnames matching their service
+// name (`db`, `app`, `tests`, etc.); operators can add more here.
+var AllowedWebhookHostnames = []string{
+	"localhost",
+	"db",
+	"app",
+	"tests",
+}
+
+// ValidateWebhookTargetURL parses, validates, and verifies that a webhook
+// target URL points at a local-network destination. The check uses the
+// CIDR allow-list above (anything outside is rejected) plus a small
+// hostname allow-list for the docker-compose service names.
+//
+// Returns the parsed *url.URL on success so callers can persist the
+// canonicalized form.
+func ValidateWebhookTargetURL(raw string) (*url.URL, error) {
+	if raw == "" {
+		return nil, errors.New("target_url is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("scheme %q not allowed (http/https only)", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil, errors.New("missing host")
+	}
+	// Hostname allow-list bypasses DNS resolution so the docker compose
+	// network names always work without going through resolv.conf.
+	for _, h := range AllowedWebhookHostnames {
+		if strings.EqualFold(host, h) {
+			return u, nil
+		}
+	}
+	// Otherwise resolve and verify each returned IP is in an allowed CIDR.
+	addrs, err := net.LookupIP(host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("no addresses for %q", host)
+	}
+	for _, ip := range addrs {
+		if !isLocalIP(ip) {
+			return nil, fmt.Errorf("host %q resolves to non-local address %s; webhook targets must be local-network only", host, ip.String())
+		}
+	}
+	return u, nil
+}
+
+func isLocalIP(ip net.IP) bool {
+	for _, cidr := range AllowedWebhookCIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
 
 type WebhookService struct {
 	repo   repository.WebhookRepository
@@ -35,9 +128,14 @@ func NewWebhookService(repo repository.WebhookRepository, log *slog.Logger) *Web
 }
 
 func (s *WebhookService) Create(ctx context.Context, w *domain.Webhook) (*domain.Webhook, error) {
-	if w.Name == "" || w.TargetURL == "" {
-		return nil, fmt.Errorf("name and target_url are required")
+	if w.Name == "" {
+		return nil, errors.Join(domain.ErrInvalidInput, errors.New("name is required"))
 	}
+	parsed, err := ValidateWebhookTargetURL(w.TargetURL)
+	if err != nil {
+		return nil, errors.Join(domain.ErrInvalidInput, err)
+	}
+	w.TargetURL = parsed.String()
 	if !w.Enabled {
 		w.Enabled = true
 	}
@@ -107,6 +205,13 @@ func (s *WebhookService) attempt(ctx context.Context, d domain.WebhookDelivery) 
 	hook, err := s.repo.Get(ctx, d.WebhookID)
 	if err != nil {
 		_ = s.repo.UpdateDeliveryAttempt(ctx, d.ID, d.Attempts+1, "failed", "missing webhook", time.Now().UTC().Add(time.Hour))
+		return
+	}
+	// Defence-in-depth: re-validate before each delivery so a row mutated
+	// directly in the database (or via a stale create-time check) cannot
+	// turn into an SSRF target.
+	if _, vErr := ValidateWebhookTargetURL(hook.TargetURL); vErr != nil {
+		s.handleFailure(ctx, d.ID, d.Attempts+1, "blocked: "+vErr.Error())
 		return
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hook.TargetURL, bytes.NewReader(d.Payload))

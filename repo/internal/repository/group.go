@@ -39,11 +39,11 @@ func (r *groupRepo) Create(ctx context.Context, g *domain.GroupReservation) erro
 
 	const q = `
 		INSERT INTO group_reservations
-		  (id, name, organizer_name, organizer_email, capacity, notes, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		  (id, name, organizer_id, organizer_name, organizer_email, capacity, notes, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 	`
 	if _, err := r.pool.Exec(ctx, q,
-		g.ID, g.Name, g.OrganizerName, g.OrganizerEmail, g.Capacity, g.Notes, g.CreatedAt, g.UpdatedAt,
+		g.ID, g.Name, g.OrganizerID, g.OrganizerName, g.OrganizerEmail, g.Capacity, g.Notes, g.CreatedAt, g.UpdatedAt,
 	); err != nil {
 		return fmt.Errorf("insert group: %w", err)
 	}
@@ -52,7 +52,7 @@ func (r *groupRepo) Create(ctx context.Context, g *domain.GroupReservation) erro
 
 func (r *groupRepo) Get(ctx context.Context, id uuid.UUID) (*domain.GroupReservation, error) {
 	const q = `
-		SELECT id, name, organizer_name, organizer_email, capacity, notes, created_at, updated_at
+		SELECT id, name, organizer_id, organizer_name, organizer_email, capacity, notes, created_at, updated_at
 		FROM group_reservations WHERE id = $1
 	`
 	row := r.pool.QueryRow(ctx, q, id)
@@ -71,7 +71,7 @@ func (r *groupRepo) List(ctx context.Context, limit, offset int) ([]domain.Group
 		limit = 50
 	}
 	const q = `
-		SELECT id, name, organizer_name, organizer_email, capacity, notes, created_at, updated_at
+		SELECT id, name, organizer_id, organizer_name, organizer_email, capacity, notes, created_at, updated_at
 		FROM group_reservations ORDER BY created_at DESC LIMIT $1 OFFSET $2
 	`
 	rows, err := r.pool.Query(ctx, q, limit, offset)
@@ -95,11 +95,11 @@ func (r *groupRepo) Update(ctx context.Context, g *domain.GroupReservation) erro
 	g.UpdatedAt = time.Now().UTC()
 	const q = `
 		UPDATE group_reservations
-		SET name=$2, organizer_name=$3, organizer_email=$4, capacity=$5, notes=$6, updated_at=$7
+		SET name=$2, organizer_id=$3, organizer_name=$4, organizer_email=$5, capacity=$6, notes=$7, updated_at=$8
 		WHERE id=$1
 	`
 	tag, err := r.pool.Exec(ctx, q,
-		g.ID, g.Name, g.OrganizerName, g.OrganizerEmail, g.Capacity, g.Notes, g.UpdatedAt,
+		g.ID, g.Name, g.OrganizerID, g.OrganizerName, g.OrganizerEmail, g.Capacity, g.Notes, g.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("update group: %w", err)
@@ -122,11 +122,15 @@ func (r *groupRepo) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 func scanGroup(s rowScanner) (*domain.GroupReservation, error) {
-	var g domain.GroupReservation
+	var (
+		g           domain.GroupReservation
+		organizerID *uuid.UUID
+	)
 	if err := s.Scan(
-		&g.ID, &g.Name, &g.OrganizerName, &g.OrganizerEmail, &g.Capacity, &g.Notes, &g.CreatedAt, &g.UpdatedAt,
+		&g.ID, &g.Name, &organizerID, &g.OrganizerName, &g.OrganizerEmail, &g.Capacity, &g.Notes, &g.CreatedAt, &g.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
+	g.OrganizerID = organizerID
 	return &g, nil
 }

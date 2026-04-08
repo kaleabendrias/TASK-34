@@ -21,7 +21,12 @@ type UserRepository interface {
 	ResetFailedLogin(ctx context.Context, id uuid.UUID, loginAt time.Time) error
 	SetBlacklist(ctx context.Context, id uuid.UUID, blacklisted bool, reason string) error
 	SetAdmin(ctx context.Context, id uuid.UUID, admin bool) error
-	Anonymize(ctx context.Context, id uuid.UUID) error
+	SetMustRotatePassword(ctx context.Context, id uuid.UUID, must bool) error
+	UpdatePasswordHash(ctx context.Context, id uuid.UUID, hash string) error
+	// HardDelete removes the user row and every dependent row attached to
+	// it via FKs. The caller is responsible for first detaching anything
+	// that should survive (analytics events, audit logs).
+	HardDelete(ctx context.Context, id uuid.UUID) error
 }
 
 type userRepo struct{ pool *pgxpool.Pool }
@@ -32,7 +37,7 @@ func NewUserRepository(pool *pgxpool.Pool) UserRepository {
 
 const userColumns = `
 	id, username, password_hash, is_blacklisted, blacklist_reason,
-	is_admin, anonymized_at,
+	is_admin, must_rotate_password, anonymized_at,
 	failed_attempts, locked_until, last_login_at, created_at, updated_at
 `
 
@@ -45,12 +50,14 @@ func (r *userRepo) Create(ctx context.Context, u *domain.User) error {
 	u.UpdatedAt = now
 	const q = `
 		INSERT INTO users (id, username, password_hash, is_blacklisted, blacklist_reason,
-		                   is_admin, failed_attempts, locked_until, last_login_at, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		                   is_admin, must_rotate_password,
+		                   failed_attempts, locked_until, last_login_at, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	`
 	_, err := r.pool.Exec(ctx, q,
 		u.ID, u.Username, u.PasswordHash, u.IsBlacklisted, u.BlacklistReason,
-		u.IsAdmin, u.FailedAttempts, u.LockedUntil, u.LastLoginAt, u.CreatedAt, u.UpdatedAt,
+		u.IsAdmin, u.MustRotatePassword,
+		u.FailedAttempts, u.LockedUntil, u.LastLoginAt, u.CreatedAt, u.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert user: %w", err)
@@ -64,22 +71,6 @@ func (r *userRepo) SetAdmin(ctx context.Context, id uuid.UUID, admin bool) error
 	return err
 }
 
-// Anonymize hard-clears all PII fields on a user row but keeps the row so
-// foreign keys (analytics, audit) remain valid.
-func (r *userRepo) Anonymize(ctx context.Context, id uuid.UUID) error {
-	const q = `
-		UPDATE users
-		SET username = 'deleted_' || substring(id::text from 1 for 8),
-		    password_hash = '',
-		    is_blacklisted = TRUE,
-		    blacklist_reason = 'account deleted',
-		    anonymized_at = NOW(),
-		    updated_at = NOW()
-		WHERE id = $1
-	`
-	_, err := r.pool.Exec(ctx, q, id)
-	return err
-}
 
 func (r *userRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	q := `SELECT ` + userColumns + ` FROM users WHERE id = $1`
@@ -152,6 +143,41 @@ func (r *userRepo) SetBlacklist(ctx context.Context, id uuid.UUID, blacklisted b
 	return nil
 }
 
+func (r *userRepo) SetMustRotatePassword(ctx context.Context, id uuid.UUID, must bool) error {
+	const q = `UPDATE users SET must_rotate_password = $2, updated_at = NOW() WHERE id = $1`
+	_, err := r.pool.Exec(ctx, q, id, must)
+	return err
+}
+
+func (r *userRepo) UpdatePasswordHash(ctx context.Context, id uuid.UUID, hash string) error {
+	const q = `UPDATE users SET password_hash = $2, must_rotate_password = FALSE, updated_at = NOW() WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, q, id, hash)
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// HardDelete removes the user row. Every dependent table referencing
+// users(id) is configured to either CASCADE on delete (sessions, bookings,
+// documents, document_revisions via documents, group_buy_participants,
+// notifications, todos, consent_records, deletion_requests) or SET NULL
+// (group_buys.organizer_id), so a single DELETE removes all personal data
+// while leaving any anonymized analytics rows untouched.
+func (r *userRepo) HardDelete(ctx context.Context, id uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("hard delete user: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 func scanUser(s rowScanner) (*domain.User, error) {
 	var (
 		u            domain.User
@@ -161,7 +187,7 @@ func scanUser(s rowScanner) (*domain.User, error) {
 	)
 	if err := s.Scan(
 		&u.ID, &u.Username, &u.PasswordHash, &u.IsBlacklisted, &u.BlacklistReason,
-		&u.IsAdmin, &anonymizedAt,
+		&u.IsAdmin, &u.MustRotatePassword, &anonymizedAt,
 		&u.FailedAttempts, &lockedUntil, &lastLogin, &u.CreatedAt, &u.UpdatedAt,
 	); err != nil {
 		return nil, err

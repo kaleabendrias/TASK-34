@@ -45,6 +45,7 @@ func NewRouter(d Deps) http.Handler {
 	soft := middleware.Authenticator(d.Auth, false)
 	must := middleware.Authenticator(d.Auth, true)
 	notBlacklisted := middleware.RequireNotBlacklisted()
+	rotated := middleware.RequirePasswordRotated()
 	idem := middleware.Idempotency(d.Idempotency)
 	cacheMW := middleware.ReadThroughCache(d.Cache)
 
@@ -57,9 +58,14 @@ func NewRouter(d Deps) http.Handler {
 	r.GET("/auth/login", d.AuthHandler.LoginPage)
 	r.GET("/auth/register", d.AuthHandler.RegisterPage)
 	r.GET("/availability", soft, d.ResourceHandler.AvailabilityPage)
-	r.GET("/bookings/new", must, notBlacklisted, d.BookingHandler.NewPage)
+	r.GET("/bookings/new", must, rotated, notBlacklisted, d.BookingHandler.NewPage)
 	r.GET("/groups", soft, d.GroupHandler.IndexHTML)
 	r.GET("/groups/:id", soft, d.GroupHandler.DetailHTML)
+	r.GET("/group-buys", soft, d.GroupBuyHandler.IndexHTML)
+	r.GET("/group-buys/:id", soft, d.GroupBuyHandler.DetailHTML)
+	r.GET("/documents", must, rotated, d.DocumentHandler.CenterHTML)
+	r.GET("/notifications", must, rotated, d.NotificationHandler.CenterHTML)
+	r.GET("/admin/analytics", must, rotated, d.AnalyticsHandler.DashboardHTML)
 
 	// JSON API
 	api := r.Group("/api")
@@ -72,14 +78,19 @@ func NewRouter(d Deps) http.Handler {
 			auth.POST("/logout", soft, d.AuthHandler.Logout)
 			auth.GET("/me", must, d.AuthHandler.Me)
 			auth.GET("/captcha", d.AuthHandler.Captcha)
+			// change-password is intentionally NOT behind `rotated` so users
+			// flagged for rotation can use it; the gate covers everything
+			// else.
+			auth.POST("/change-password", must, d.AuthHandler.ChangePassword)
 		}
 
 		// --- read-only resource catalog (cached) ---
 		api.GET("/resources", soft, cacheMW, d.ResourceHandler.List)
+		api.GET("/resources/:id/remaining", soft, d.ResourceHandler.RemainingSeats)
 		api.GET("/availability", soft, cacheMW, d.ResourceHandler.Availability)
 
 		// --- bookings ---
-		bookings := api.Group("/bookings", must)
+		bookings := api.Group("/bookings", must, rotated)
 		{
 			bookings.POST("", notBlacklisted, idem, d.BookingHandler.Create)
 			bookings.GET("", d.BookingHandler.ListMine)
@@ -90,24 +101,27 @@ func NewRouter(d Deps) http.Handler {
 		// --- group reservations ---
 		groups := api.Group("/groups")
 		{
-			groups.POST("", d.GroupHandler.Create)
-			groups.GET("", cacheMW, d.GroupHandler.List)
-			groups.GET("/:id", d.GroupHandler.Get)
+			// Create requires a session so the organiser-of-record is known
+			// at insert time; the masking gate uses organizer_id to decide
+			// whether to leak the email and full name on shared views.
+			groups.POST("", must, rotated, d.GroupHandler.Create)
+			groups.GET("", soft, cacheMW, d.GroupHandler.List)
+			groups.GET("/:id", soft, d.GroupHandler.Get)
 		}
 
 		// --- GROUP BUYS ---
 		gb := api.Group("/group-buys")
 		{
-			gb.POST("", must, notBlacklisted, idem, d.GroupBuyHandler.Create)
+			gb.POST("", must, rotated, notBlacklisted, idem, d.GroupBuyHandler.Create)
 			gb.GET("", soft, cacheMW, d.GroupBuyHandler.List)
 			gb.GET("/:id", soft, d.GroupBuyHandler.Get)
 			gb.GET("/:id/progress", soft, d.GroupBuyHandler.Progress)
 			gb.GET("/:id/participants", soft, d.GroupBuyHandler.Participants)
-			gb.POST("/:id/join", must, notBlacklisted, idem, d.GroupBuyHandler.Join)
+			gb.POST("/:id/join", must, rotated, notBlacklisted, idem, d.GroupBuyHandler.Join)
 		}
 
 		// --- DOCUMENTS ---
-		docs := api.Group("/documents", must)
+		docs := api.Group("/documents", must, rotated)
 		{
 			docs.POST("/confirmation", idem, d.DocumentHandler.Confirmation)
 			docs.POST("/checkin-pass", idem, d.DocumentHandler.CheckinPass)
@@ -117,7 +131,7 @@ func NewRouter(d Deps) http.Handler {
 		}
 
 		// --- NOTIFICATIONS & TODOS ---
-		notify := api.Group("", must)
+		notify := api.Group("", must, rotated)
 		{
 			notify.GET("/notifications", d.NotificationHandler.List)
 			notify.GET("/notifications/unread-count", d.NotificationHandler.UnreadCount)
@@ -136,14 +150,14 @@ func NewRouter(d Deps) http.Handler {
 		// --- GOVERNANCE ---
 		api.GET("/governance/dictionary", soft, cacheMW, d.GovernanceHandler.Dictionary)
 		api.GET("/governance/tags", soft, cacheMW, d.GovernanceHandler.Tags)
-		api.POST("/consent/grant", must, d.GovernanceHandler.GrantConsent)
-		api.POST("/consent/withdraw", must, d.GovernanceHandler.WithdrawConsent)
-		api.GET("/consent", must, d.GovernanceHandler.ListConsent)
-		api.POST("/account/delete", must, d.GovernanceHandler.RequestDeletion)
-		api.POST("/account/delete/cancel", must, d.GovernanceHandler.CancelDeletion)
+		api.POST("/consent/grant", must, rotated, d.GovernanceHandler.GrantConsent)
+		api.POST("/consent/withdraw", must, rotated, d.GovernanceHandler.WithdrawConsent)
+		api.GET("/consent", must, rotated, d.GovernanceHandler.ListConsent)
+		api.POST("/account/delete", must, rotated, d.GovernanceHandler.RequestDeletion)
+		api.POST("/account/delete/cancel", must, rotated, d.GovernanceHandler.CancelDeletion)
 
 		// --- ADMIN ---
-		admin := api.Group("/admin", must)
+		admin := api.Group("/admin", must, rotated)
 		{
 			admin.GET("/notification-deliveries", d.NotificationHandler.AdminDeliveries)
 			admin.GET("/anomalies", d.AnalyticsHandler.Anomalies)

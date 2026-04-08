@@ -13,6 +13,7 @@ import (
 	"github.com/harborworks/booking-hub/internal/api/middleware"
 	"github.com/harborworks/booking-hub/internal/domain"
 	"github.com/harborworks/booking-hub/internal/service"
+	"github.com/harborworks/booking-hub/internal/views"
 )
 
 type GroupBuyHandler struct {
@@ -201,3 +202,52 @@ var _ = parseTime
 // ensure time package is kept used even when the handler compiles without
 // referencing it otherwise (no-op line).
 var _ = time.Second
+
+// ---------- HTML pages ----------
+
+// GET /group-buys — list all group buys (soft auth).
+func (h *GroupBuyHandler) IndexHTML(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	out, err := h.svc.List(c.Request.Context(), 50, 0)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	renderTempl(c, http.StatusOK, views.GroupBuyIndex(usernameOf(user), out))
+}
+
+// GET /group-buys/:id — detail page with progress bar and join action.
+func (h *GroupBuyHandler) DetailHTML(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.String(http.StatusBadRequest, "invalid id")
+		return
+	}
+	user := middleware.CurrentUser(c)
+	gb, err := h.svc.Get(c.Request.Context(), id)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	progress, _ := h.svc.Progress(c.Request.Context(), id)
+
+	parts, err := h.svc.Participants(c.Request.Context(), id)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	displayParts := make([]map[string]any, 0, len(parts))
+	isMember := false
+	for _, p := range parts {
+		if user != nil && p.UserID == user.ID {
+			isMember = true
+		}
+		displayParts = append(displayParts, map[string]any{
+			"id":          p.ID,
+			"masked_name": domain.MaskName(p.UserID.String()[:8]),
+			"quantity":    p.Quantity,
+			"joined_at":   p.JoinedAt.Format("2006-01-02 15:04 UTC"),
+		})
+	}
+	renderTempl(c, http.StatusOK, views.GroupBuyDetail(usernameOf(user), *gb, progress, displayParts, isMember))
+}

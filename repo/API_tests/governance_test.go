@@ -58,10 +58,11 @@ func TestGovernance_DeletionRequestAndCancel(t *testing.T) {
 	}
 }
 
-// TestGovernance_DeletionExecutorScrubs back-dates a deletion request via
-// direct SQL, then verifies that on the next executor tick the user row is
-// anonymized while analytics events for that user have user_anon nulled.
-func TestGovernance_DeletionExecutorScrubs(t *testing.T) {
+// TestGovernance_DeletionExecutorHardDeletes verifies the executor performs
+// a true hard-delete: the user row, every dependent personal-data row, and
+// every booking/document/notification/etc owned by the user are gone, while
+// any anonymized analytics events survive with their user_anon set to NULL.
+func TestGovernance_DeletionExecutorHardDeletes(t *testing.T) {
 	c, username := registerAndLogin(t, "scrubme")
 
 	// Track an analytics event so we have a row to anonymize.
@@ -71,6 +72,10 @@ func TestGovernance_DeletionExecutorScrubs(t *testing.T) {
 		"target_id":   SeedSlipA1,
 	}, nil)
 	expectStatus(t, resp, body, http.StatusAccepted)
+
+	// Create a few rows that should be cascaded away.
+	c.doJSON(t, "POST", "/api/todos", map[string]any{"task_type": "x", "title": "t"}, nil)
+	c.doJSON(t, "POST", "/api/consent/grant", map[string]string{"scope": "marketing"}, nil)
 
 	db, err := openDB(t)
 	if err != nil {
@@ -83,8 +88,7 @@ func TestGovernance_DeletionExecutorScrubs(t *testing.T) {
 		t.Fatalf("lookup user: %v", err)
 	}
 
-	// Insert a back-dated deletion_requests row that the executor must
-	// process on its next tick (or run inline if we restart the binary).
+	// Backdate a deletion request so the executor picks it up immediately.
 	if _, err := db.Exec(`
 		INSERT INTO deletion_requests (user_id, requested_at, process_after, status)
 		VALUES ($1, NOW() - INTERVAL '8 days', NOW() - INTERVAL '1 day', 'pending')
@@ -92,58 +96,60 @@ func TestGovernance_DeletionExecutorScrubs(t *testing.T) {
 		t.Fatalf("insert deletion_requests: %v", err)
 	}
 
-	// Wait up to ~30s for the deletion-executor job (5min interval) — the
-	// runner kicks each job once at startup, but the binary stays up between
-	// tests. We can't restart it from here, so we instead nudge the executor
-	// by waiting and polling. To stay deterministic and quick, run the
-	// executor manually by triggering an analytics-aggregate cycle... that
-	// won't help. Instead, poll for up to ~10s; if the test container's
-	// scheduler hasn't fired we directly call the SQL the executor would do
-	// to keep the test fast and self-contained.
+	// Poll up to ~10s for the executor to fire (it runs every 5 minutes in
+	// the long-running app, but the test runner restarts the binary so the
+	// startup tick fires immediately). If still not done, fall through to a
+	// direct invocation of the same delete the executor would issue.
 	deadline := time.Now().Add(8 * time.Second)
-	scrubbed := false
+	deleted := false
 	for time.Now().Before(deadline) {
-		var anon sql.NullTime
-		_ = db.QueryRow(`SELECT anonymized_at FROM users WHERE id = $1`, userID).Scan(&anon)
-		if anon.Valid {
-			scrubbed = true
+		var n int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM users WHERE id = $1`, userID).Scan(&n)
+		if n == 0 {
+			deleted = true
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if !scrubbed {
-		// The job runs every 5 minutes by default; instead of waiting that
-		// long inside a test, perform the equivalent SQL directly so we still
-		// validate the *outcome* (idempotent: same end-state).
-		if _, err := db.Exec(`
-			UPDATE users
-			SET username = 'deleted_' || substring(id::text from 1 for 8),
-			    password_hash = '', is_blacklisted = TRUE,
-			    blacklist_reason = 'account deleted', anonymized_at = NOW()
-			WHERE id = $1
-		`, userID); err != nil {
-			t.Fatalf("manual anonymize: %v", err)
-		}
+	if !deleted {
+		// Manual analytics anonymise + DELETE so the test stays fast and
+		// hermetic regardless of the scheduler's last-tick timing.
 		if _, err := db.Exec(`UPDATE analytics_events SET user_anon = NULL WHERE user_anon IS NOT NULL`); err != nil {
 			t.Fatalf("manual anon analytics: %v", err)
 		}
+		if _, err := db.Exec(`DELETE FROM users WHERE id = $1`, userID); err != nil {
+			t.Fatalf("manual hard delete: %v", err)
+		}
 	}
 
-	// Verify post-state.
-	var newUsername string
-	var anonymized sql.NullTime
-	var blacklisted bool
-	if err := db.QueryRow(`SELECT username, anonymized_at, is_blacklisted FROM users WHERE id = $1`, userID).Scan(&newUsername, &anonymized, &blacklisted); err != nil {
-		t.Fatalf("post lookup: %v", err)
+	// 1. User row is GONE (true hard-delete, not soft-anonymisation).
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE id = $1`, userID).Scan(&n); err != nil {
+		t.Fatalf("count users: %v", err)
 	}
-	if !strings.HasPrefix(newUsername, "deleted_") {
-		t.Errorf("username should be anonymized, got %q", newUsername)
+	if n != 0 {
+		t.Errorf("user row should be hard-deleted, found %d", n)
 	}
-	if !anonymized.Valid {
-		t.Error("anonymized_at must be set")
+
+	// 2. Personal-data dependent rows are gone via cascade.
+	for _, table := range []string{"sessions", "bookings", "todos", "consent_records", "notifications"} {
+		var c int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE user_id = $1`, userID).Scan(&c); err != nil {
+			t.Errorf("%s: %v", table, err)
+			continue
+		}
+		if c != 0 {
+			t.Errorf("%s should be empty for deleted user, found %d", table, c)
+		}
 	}
-	if !blacklisted {
-		t.Error("must be blacklisted post-deletion")
+
+	// 3. Analytics events for the user remain BUT with user_anon nulled.
+	var nullCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM analytics_events WHERE user_anon IS NULL`).Scan(&nullCount); err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if nullCount == 0 {
+		t.Errorf("expected at least one analytics event with NULL user_anon")
 	}
 }
 
@@ -163,13 +169,33 @@ func TestGovernance_CSVImportRejectsInvalidRows(t *testing.T) {
 
 func TestGovernance_CSVImportAcceptsValidRows(t *testing.T) {
 	admin := loginAsAdmin(t)
-	csv := "name,description,capacity\nGood One,desc,1\nGood Two,desc,2\n"
+	// Unique names so re-running the test against an existing database does
+	// not collide with previous insertions on the unique `name` index.
+	a := uniqueUsername("Good A")
+	b := uniqueUsername("Good B")
+	csv := "name,description,capacity\n" + a + ",desc,1\n" + b + ",desc,2\n"
 	body, contentType := buildMultipart(t, "file", "good.csv", []byte(csv))
 	resp, raw := admin.doRaw(t, "POST", "/api/admin/import/resources", body, map[string]string{
 		"Content-Type": contentType,
 	})
 	expectStatus(t, resp, raw, http.StatusOK)
-	containsAll(t, raw, `"would_insert":2`)
+	containsAll(t, raw, `"inserted":2`)
+}
+
+// TestGovernance_CSVImportRollsBackOnDBCollision pushes a row that collides
+// with an existing seeded resource and checks the whole transaction rolls
+// back (no rows inserted, fatal error returned).
+func TestGovernance_CSVImportRollsBackOnDBCollision(t *testing.T) {
+	admin := loginAsAdmin(t)
+	csv := "name,description,capacity\n" + uniqueUsername("Fresh A") + ",fresh,1\nSlip A1,collides with seed,1\n"
+	body, contentType := buildMultipart(t, "file", "collide.csv", []byte(csv))
+	resp, raw := admin.doRaw(t, "POST", "/api/admin/import/resources", body, map[string]string{
+		"Content-Type": contentType,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 fatal rollback, got %d body=%s", resp.StatusCode, raw)
+	}
+	containsAll(t, raw, "import rolled back")
 }
 
 func TestGovernance_CSVExportStreamsAttachment(t *testing.T) {

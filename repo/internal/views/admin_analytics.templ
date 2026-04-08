@@ -1,0 +1,168 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/harborworks/booking-hub/internal/domain"
+)
+
+// AdminAnalyticsPageData carries everything the dashboard needs in a single
+// struct so the handler doesn't have to thread half a dozen positional
+// parameters into the templ component.
+type AdminAnalyticsPageData struct {
+	Username  string
+	Top       []domain.TopSession
+	Day7      []domain.TrendBucket
+	Day30     []domain.TrendBucket
+	Day90     []domain.TrendBucket
+	Anomalies []domain.AnomalyAlert
+	EventType string
+}
+
+templ AdminAnalyticsPage(data AdminAnalyticsPageData) {
+	@Layout("Admin · analytics", data.Username) {
+		<style>
+			.aa-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+			@media (max-width:880px) { .aa-grid { grid-template-columns:1fr; } }
+			.aa-spark { display:flex; align-items:flex-end; gap:2px; height:60px; }
+			.aa-spark > div { background: var(--accent); width:14px; border-radius:2px 2px 0 0; }
+			.aa-spark .empty { background:#1f4865; }
+			.banner { background:#3a1414; border-left:3px solid var(--err); padding:0.6rem 1rem; border-radius:4px; color:var(--err); margin-bottom:1rem; }
+		</style>
+		<h2>Offline analytics</h2>
+		<p class="muted">Aggregations are produced by the <code>analytics-aggregate</code> background job; anomaly detection by <code>anomaly-detect</code>. The dashboard reads pre-computed rows so the page is cheap to refresh.</p>
+
+		if len(data.Anomalies) > 0 {
+			<div class="banner">
+				<strong>{ fmt.Sprintf("%d traffic anomaly alerts", len(data.Anomalies)) }</strong>
+				— at least one event type's last hour exceeded 3× the trailing 7-day hourly average.
+			</div>
+		}
+
+		<div class="aa-grid">
+			<div class="card">
+				<h3 style="margin-top:0;">Top sessions (last 7 days)</h3>
+				if len(data.Top) == 0 {
+					<div class="empty">No traffic recorded.</div>
+				} else {
+					<table>
+						<thead><tr><th>Target</th><th>Score</th></tr></thead>
+						<tbody>
+							for _, t := range data.Top {
+								<tr>
+									<td>
+										<span class="muted">{ t.TargetType }</span>
+										<code>{ t.TargetID.String()[:8] }…</code>
+									</td>
+									<td><strong>{ fmt.Sprintf("%d", t.Score) }</strong></td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+
+			<div class="card">
+				<h3 style="margin-top:0;">Anomaly alerts</h3>
+				if len(data.Anomalies) == 0 {
+					<div class="empty">No anomalies detected.</div>
+				} else {
+					<table>
+						<thead><tr><th>Detected</th><th>Event</th><th>Observed</th><th>Baseline</th><th>×</th></tr></thead>
+						<tbody>
+							for _, a := range data.Anomalies {
+								<tr>
+									<td class="muted">{ formatDateTime(a.DetectedAt) }</td>
+									<td>{ string(a.EventType) }</td>
+									<td>{ fmt.Sprintf("%d", a.Observed) }</td>
+									<td>{ fmt.Sprintf("%.1f", a.Baseline) }</td>
+									<td><strong>{ fmt.Sprintf("%.1fx", a.Ratio) }</strong></td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+		</div>
+
+		<h3 style="margin-top:1.5rem;">Trends (event type: <code>{ data.EventType }</code>)</h3>
+		<div class="aa-grid">
+			@trendCard("7 days", data.Day7)
+			@trendCard("30 days", data.Day30)
+		</div>
+		<div class="aa-grid" style="margin-top:1rem;">
+			@trendCard("90 days", data.Day90)
+			<div class="card">
+				<h3 style="margin-top:0;">Switch event type</h3>
+				<form method="GET" action="/admin/analytics" class="stacked">
+					<label>
+						Event
+						@eventTypeSelect(data.EventType)
+					</label>
+					<button type="submit">Reload</button>
+				</form>
+			</div>
+		</div>
+	}
+}
+
+templ trendCard(label string, buckets []domain.TrendBucket) {
+	<div class="card">
+		<h3 style="margin-top:0;">{ label }</h3>
+		if len(buckets) == 0 {
+			<div class="empty">No data.</div>
+		} else {
+			@trendSpark(buckets)
+			<p class="muted" style="margin:0.5rem 0 0;">{ fmt.Sprintf("%d buckets · total %d", len(buckets), trendTotal(buckets)) }</p>
+		}
+	</div>
+}
+
+// eventTypeSelect renders the four-option event-type dropdown with the
+// current selection pre-marked. Done as raw HTML so the templ parser does
+// not need to handle the boolean attribute on every option.
+func eventTypeSelect(current string) templ.Component {
+	options := []string{"view", "favorite", "comment", "download"}
+	html := `<select name="event_type">`
+	for _, o := range options {
+		sel := ""
+		if o == current {
+			sel = " selected"
+		}
+		html += fmt.Sprintf(`<option value="%s"%s>%s</option>`, o, sel, o)
+	}
+	html += `</select>`
+	return templ.Raw(html)
+}
+
+// trendSpark renders the sparkline as raw HTML so the per-bar style="height:Npx"
+// attribute does not need a templ string-attribute expression (which the
+// templ parser rejects). The output is escaped at build time.
+func trendSpark(buckets []domain.TrendBucket) templ.Component {
+	max := int64(1)
+	for _, x := range buckets {
+		if x.Count > max {
+			max = x.Count
+		}
+	}
+	var html string
+	html += `<div class="aa-spark">`
+	for _, b := range buckets {
+		h := (b.Count * 60) / max
+		if h < 2 {
+			h = 2
+		}
+		title := templ.EscapeString(fmt.Sprintf("%s: %d", b.BucketStart.Format("Jan 2"), b.Count))
+		html += fmt.Sprintf(`<div style="height:%dpx" title="%s"></div>`, h, title)
+	}
+	html += `</div>`
+	return templ.Raw(html)
+}
+
+func trendTotal(b []domain.TrendBucket) int64 {
+	var t int64
+	for _, x := range b {
+		t += x.Count
+	}
+	return t
+}

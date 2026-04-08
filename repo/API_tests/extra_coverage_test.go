@@ -9,10 +9,10 @@ import (
 // TestExtra_GroupDetailHTML hits /groups/:id which goes through the soft auth
 // path and renders the GroupDetail templ template.
 func TestExtra_GroupDetailHTML(t *testing.T) {
-	c := newClient(t)
+	c, _ := registerAndLogin(t, "groupdetail")
 	// Create a group via the API first.
 	resp, body := c.doJSON(t, "POST", "/api/groups", map[string]any{
-		"name":            "Detail group",
+		"name":            "Detail group " + uniqueUsername("g"),
 		"organizer_email": "detail@example.com",
 		"capacity":        5,
 	}, nil)
@@ -274,7 +274,7 @@ func TestExtra_LoggedInHTMLPages(t *testing.T) {
 	}
 	// Create a group then GET its detail page (logged in).
 	resp, body := c.doJSON(t, "POST", "/api/groups", map[string]any{
-		"name": "Logged group", "organizer_email": "lg@example.com", "capacity": 5,
+		"name": "Logged group " + uniqueUsername("g"), "organizer_email": "lg@example.com", "capacity": 5,
 	}, nil)
 	expectStatus(t, resp, body, http.StatusCreated)
 	id, _ := mustJSON(t, body)["id"].(string)

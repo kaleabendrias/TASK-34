@@ -37,6 +37,11 @@ type loginRequest struct {
 	CaptchaAnswer string `json:"captcha_answer" form:"captcha_answer"`
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password" form:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password"     form:"new_password"     binding:"required"`
+}
+
 // ---------- JSON endpoints ----------
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -90,6 +95,24 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 
 func (h *AuthHandler) Me(c *gin.Context) {
 	c.JSON(http.StatusOK, middleware.CurrentUser(c))
+}
+
+// POST /api/auth/change-password — required when the must_rotate_password
+// flag is set on the current user. Validates the current password against
+// bcrypt, applies the password policy to the new value, and clears the
+// rotation flag on success.
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	var req changePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.auth.ChangePassword(c.Request.Context(), user.ID, req.CurrentPassword, req.NewPassword); err != nil {
+		writeAuthError(c, h.auth, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "rotated"})
 }
 
 // Captcha mints a fresh challenge.

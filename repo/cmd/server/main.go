@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -80,7 +83,6 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("encryption key ready", "path", keyMgr.KeyPath())
-	_ = keyMgr // available for booking notes encryption (used by services that need it)
 
 	// --- Repositories ---
 	userRepo := repository.NewUserRepository(pool)
@@ -101,7 +103,7 @@ func main() {
 	// --- Services ---
 	authSvc := service.NewAuthService(userRepo, sessionRepo, captchaRepo, logger, service.DefaultAuthSettings())
 	resourceSvc := service.NewResourceService(resourceRepo, bookingRepo, logger)
-	bookingSvc := service.NewBookingService(bookingRepo, resourceRepo, userRepo, logger, service.DefaultBookingPolicy())
+	bookingSvc := service.NewBookingService(bookingRepo, resourceRepo, userRepo, keyMgr, logger, service.DefaultBookingPolicy())
 	groupSvc := service.NewGroupService(groupRepo, bookingRepo, logger)
 	notifSvc := service.NewNotificationService(notifRepo, logger)
 	groupBuySvc := service.NewGroupBuyService(groupBuyRepo, resourceRepo, userRepo, notifRepo, logger)
@@ -196,13 +198,14 @@ func main() {
 	logger.Info("server stopped cleanly")
 }
 
-func seedAdminUser(ctx context.Context, repo repository.UserRepository, logger interface {
-	Info(msg string, args ...any)
-}) error {
-	const (
-		username = "harbormaster"
-		password = "Harbor@Works2026!"
-	)
+// initialAdminPasswordPath is where seedAdminUser writes the one-time
+// credential on first boot. The file is mode 0600 inside the keys volume
+// so only the harbor user can read it. The operator is expected to read
+// it once, log in, rotate the password, and then delete the file.
+const initialAdminPasswordPath = "/app/keys/initial_admin_password"
+
+func seedAdminUser(ctx context.Context, repo repository.UserRepository, logger *slog.Logger) error {
+	const username = "harbormaster"
 
 	if existing, err := repo.GetByUsername(ctx, username); err == nil && existing != nil {
 		// Make sure existing harbormaster has the admin flag.
@@ -214,23 +217,61 @@ func seedAdminUser(ctx context.Context, repo repository.UserRepository, logger i
 		return err
 	}
 
+	// Generate a high-entropy random password rather than baking one into
+	// the source. The plaintext is written to a one-time file the operator
+	// must read; it never appears in stdout/stderr.
+	password, err := generateInitialPassword()
+	if err != nil {
+		return fmt.Errorf("generate initial password: %w", err)
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
 	u := &domain.User{
-		Username:     username,
-		PasswordHash: string(hash),
-		IsAdmin:      true,
+		Username:           username,
+		PasswordHash:       string(hash),
+		IsAdmin:            true,
+		MustRotatePassword: true,
 	}
 	if err := repo.Create(ctx, u); err != nil {
 		return err
 	}
+
+	// Write the credential to a one-time secret file. Mode 0600 so only the
+	// container user can read it; the file lives on the keys named volume so
+	// it survives container rebuilds until the operator deletes it.
+	if err := os.WriteFile(initialAdminPasswordPath, []byte(password+"\n"), 0o600); err != nil {
+		// We still proceed; if the file is unwritable the operator can rotate
+		// via the existing reset flow. We log a clear actionable message but
+		// no plaintext.
+		logger.Warn("could not write initial admin password file",
+			"path", initialAdminPasswordPath, "error", err)
+	}
+
+	// SAFE seed event log: no password, no PII, only the things an operator
+	// needs to find the credential and the rotation requirement.
 	logger.Info("default admin user seeded",
 		"username", username,
-		"password", password,
-		"note", "change this credential before exposing the stack")
+		"credential_path", initialAdminPasswordPath,
+		"rotation_required", true,
+		"action", "read the file once, sign in, then POST /api/auth/change-password")
 	return nil
+}
+
+// generateInitialPassword returns a 24-byte URL-safe base64 password that
+// satisfies the policy by construction (length, mixed-case alphanumerics,
+// and we append a single symbol so the symbol class is also covered).
+func generateInitialPassword() (string, error) {
+	buf := make([]byte, 18)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	// Manual mix so we always satisfy the password policy without relying on
+	// chance. Format: <base64 prefix><A1!> guarantees upper/digit/symbol; the
+	// base64 alphabet covers lowercase.
+	return base64.RawURLEncoding.EncodeToString(buf) + "A1!", nil
 }
 
 // pool variable kept exported for any future helpers needing direct DB access.

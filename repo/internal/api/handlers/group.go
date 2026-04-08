@@ -31,6 +31,31 @@ type groupRequest struct {
 	Notes          string `json:"notes" form:"notes"`
 }
 
+// canSeeOrganizerPII reports whether the requester is allowed to see the
+// real organizer name and email on the supplied group. Owners and admins
+// always can; everyone else (including anonymous browsers) gets the
+// MaskedView() projection.
+func canSeeOrganizerPII(user *domain.User, g *domain.GroupReservation) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsAdmin {
+		return true
+	}
+	if g.OrganizerID != nil && *g.OrganizerID == user.ID {
+		return true
+	}
+	return false
+}
+
+// projectGroup masks PII unless the requester is an authorised viewer.
+func projectGroup(user *domain.User, g domain.GroupReservation) domain.GroupReservation {
+	if canSeeOrganizerPII(user, &g) {
+		return g
+	}
+	return g.MaskedView()
+}
+
 // POST /api/groups
 func (h *GroupHandler) Create(c *gin.Context) {
 	var req groupRequest
@@ -45,15 +70,23 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		Capacity:       req.Capacity,
 		Notes:          req.Notes,
 	}
+	// Stamp the authenticated user (if any) as the organizer-of-record so
+	// the masking gate can later verify ownership without an email match.
+	if user := middleware.CurrentUser(c); user != nil {
+		id := user.ID
+		g.OrganizerID = &id
+	}
 	created, err := h.svc.Create(c.Request.Context(), g)
 	if err != nil {
 		writeServiceError(c, err)
 		return
 	}
+	// Echo the freshly created group back unmodified — the user who just
+	// created it is by definition the owner.
 	c.JSON(http.StatusCreated, created)
 }
 
-// GET /api/groups
+// GET /api/groups (shared list — organiser PII is always masked here)
 func (h *GroupHandler) List(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
@@ -62,7 +95,12 @@ func (h *GroupHandler) List(c *gin.Context) {
 		writeServiceError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"groups": groups, "count": len(groups)})
+	user := middleware.CurrentUser(c)
+	out := make([]domain.GroupReservation, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, projectGroup(user, g))
+	}
+	c.JSON(http.StatusOK, gin.H{"groups": out, "count": len(out)})
 }
 
 // GET /api/groups/:id
@@ -77,7 +115,8 @@ func (h *GroupHandler) Get(c *gin.Context) {
 		writeServiceError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, g)
+	user := middleware.CurrentUser(c)
+	c.JSON(http.StatusOK, projectGroup(user, *g))
 }
 
 // GET /groups (HTML)
@@ -88,7 +127,11 @@ func (h *GroupHandler) IndexHTML(c *gin.Context) {
 		return
 	}
 	user := middleware.CurrentUser(c)
-	renderTempl(c, http.StatusOK, views.GroupIndex(usernameOf(user), groups))
+	masked := make([]domain.GroupReservation, 0, len(groups))
+	for _, g := range groups {
+		masked = append(masked, projectGroup(user, g))
+	}
+	renderTempl(c, http.StatusOK, views.GroupIndex(usernameOf(user), masked))
 }
 
 // GET /groups/:id (HTML)
@@ -104,5 +147,6 @@ func (h *GroupHandler) DetailHTML(c *gin.Context) {
 		return
 	}
 	user := middleware.CurrentUser(c)
-	renderTempl(c, http.StatusOK, views.GroupDetail(usernameOf(user), *g))
+	view := projectGroup(user, *g)
+	renderTempl(c, http.StatusOK, views.GroupDetail(usernameOf(user), view))
 }

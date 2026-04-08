@@ -1,0 +1,76 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/harborworks/booking-hub/internal/domain"
+)
+
+func docTypeLabel(t domain.DocumentType) string {
+	switch t {
+	case domain.DocConfirmationPDF:
+		return "Confirmation PDF"
+	case domain.DocCheckinPassPNG:
+		return "Check-in pass (PNG)"
+	}
+	return string(t)
+}
+
+templ DocumentCenter(username string, docs []domain.Document) {
+	@Layout("Document center", username) {
+		<style>
+			.doc-card { padding:1rem 1.25rem; margin-bottom:1rem; }
+			.rev-row { display:flex; gap:1rem; align-items:center; padding:0.4rem 0; border-top:1px solid #1f4865; }
+			.rev-row:first-child { border-top:none; }
+			.rev-num { font-weight:600; color: var(--accent); min-width:3rem; }
+			.rev-link { color: var(--accent); }
+			.superseded { opacity:0.7; }
+		</style>
+		<h2>Document center</h2>
+		<p class="muted">Every confirmation PDF and check-in pass you've generated. Old revisions are kept and labelled <span class="badge waitlisted">superseded</span> so you can always retrieve a historic version.</p>
+		if len(docs) == 0 {
+			<div class="empty">No documents yet. Create a booking and the confirmation will land here.</div>
+		} else {
+			for _, d := range docs {
+				<div class="card doc-card">
+					<h3 style="margin:0 0 0.4rem;">
+						{ d.Title }
+						&nbsp;<span class="badge checked_in">{ docTypeLabel(d.DocType) }</span>
+					</h3>
+					<p class="muted" style="margin:0 0 0.8rem;">
+						related to { d.RelatedType } <code>{ d.RelatedID.String()[:8] }…</code>
+						· current revision <strong>{ fmt.Sprintf("%d", d.CurrentRevision) }</strong>
+					</p>
+					if len(d.Revisions) == 0 {
+						<p class="muted">No revisions loaded.</p>
+					} else {
+						for _, r := range d.Revisions {
+							<div class={ revRowClass(r) }>
+								<span class="rev-num">v{ fmt.Sprintf("%d", r.Revision) }</span>
+								<span class="muted">{ formatDateTime(r.CreatedAt) }</span>
+								<span>{ r.ContentType }</span>
+								if r.Superseded {
+									<span class="badge waitlisted">superseded</span>
+								} else {
+									<span class="badge checked_in">current</span>
+								}
+								<a class="rev-link" href={ docDownloadURL(d.ID.String(), r.Revision) }>download</a>
+							</div>
+						}
+					}
+				</div>
+			}
+		}
+	}
+}
+
+func revRowClass(r domain.DocumentRevision) string {
+	if r.Superseded {
+		return "rev-row superseded"
+	}
+	return "rev-row"
+}
+
+func docDownloadURL(id string, rev int) templ.SafeURL {
+	return templ.SafeURL(fmt.Sprintf("/api/documents/%s/content?revision=%d", id, rev))
+}

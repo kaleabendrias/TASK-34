@@ -29,10 +29,19 @@ func DefaultBookingPolicy() BookingPolicy {
 	}
 }
 
+// notesEncrypter encrypts a plaintext note into the secure_notes column.
+// Implemented by *crypto.KeyManager but kept as an interface so the booking
+// service stays decoupled from the infrastructure package.
+type notesEncrypter interface {
+	Encrypt(plaintext []byte) ([]byte, error)
+	Decrypt(ciphertext []byte) ([]byte, error)
+}
+
 type BookingService struct {
 	bookings  repository.BookingRepository
 	resources repository.ResourceRepository
 	users     repository.UserRepository
+	encrypter notesEncrypter
 	policy    BookingPolicy
 	log       *slog.Logger
 }
@@ -41,28 +50,43 @@ func NewBookingService(
 	bookings repository.BookingRepository,
 	resources repository.ResourceRepository,
 	users repository.UserRepository,
+	encrypter notesEncrypter,
 	log *slog.Logger,
 	policy BookingPolicy,
 ) *BookingService {
-	return &BookingService{bookings: bookings, resources: resources, users: users, log: log, policy: policy}
+	return &BookingService{
+		bookings:  bookings,
+		resources: resources,
+		users:     users,
+		encrypter: encrypter,
+		log:       log,
+		policy:    policy,
+	}
 }
 
 func (s *BookingService) Policy() BookingPolicy { return s.policy }
 
 // CreateInput captures the parameters of a new booking request.
+//
+// Notes is the legacy plaintext column kept for non-sensitive copy.
+// SecureNotes is encrypted with the locally-managed master key before
+// landing in the secure_notes BYTEA column and decrypted on read for the
+// booking owner only.
 type CreateInput struct {
-	UserID     uuid.UUID
-	ResourceID uuid.UUID
-	GroupID    *uuid.UUID
-	PartySize  int
-	StartTime  time.Time
-	EndTime    time.Time
-	Notes      string
+	UserID      uuid.UUID
+	ResourceID  uuid.UUID
+	GroupID     *uuid.UUID
+	PartySize   int
+	StartTime   time.Time
+	EndTime     time.Time
+	Notes       string
+	SecureNotes string
 }
 
-// Create applies the full booking policy and persists the result. Bookings
-// that conflict with another active booking on the same resource are placed
-// on the waitlist instead of being rejected.
+// Create applies the full booking policy and persists the result. Strict
+// per-slot capacity is enforced: a request whose party size would push the
+// resource above its seat budget for the requested window is dropped onto
+// the waitlist instead of confirmed.
 func (s *BookingService) Create(ctx context.Context, in CreateInput) (*domain.Booking, error) {
 	// 0. Blacklist gate. Hard block.
 	user, err := s.users.GetByID(ctx, in.UserID)
@@ -74,7 +98,8 @@ func (s *BookingService) Create(ctx context.Context, in CreateInput) (*domain.Bo
 	}
 
 	// 1. Resource must exist.
-	if _, err := s.resources.Get(ctx, in.ResourceID); err != nil {
+	resource, err := s.resources.Get(ctx, in.ResourceID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -87,6 +112,10 @@ func (s *BookingService) Create(ctx context.Context, in CreateInput) (*domain.Bo
 	}
 	if in.PartySize <= 0 {
 		in.PartySize = 1
+	}
+	if in.PartySize > resource.Capacity {
+		return nil, errors.Join(domain.ErrCapacityExceed,
+			fmt.Errorf("party size %d exceeds resource capacity %d", in.PartySize, resource.Capacity))
 	}
 
 	// 3. Lead-time gate (>= 2h from now).
@@ -114,25 +143,40 @@ func (s *BookingService) Create(ctx context.Context, in CreateInput) (*domain.Bo
 		return nil, errors.Join(domain.ErrOverlap, errors.New("you already have a booking in this window"))
 	}
 
-	// 6. Resource conflict ⇒ waitlist instead of reject.
-	resourceBusy, err := s.bookings.ResourceHasOverlap(ctx, in.ResourceID, in.StartTime, in.EndTime, nil)
+	// 6. Strict per-slot capacity: total - active >= party_size, otherwise
+	//    drop the request onto the waitlist.
+	activeParty, err := s.resources.SumActivePartySizesInWindow(ctx, in.ResourceID, in.StartTime, in.EndTime)
 	if err != nil {
 		return nil, err
 	}
+	remaining := resource.Capacity - activeParty
 	status := domain.StatusPendingConfirmation
-	if resourceBusy {
+	if in.PartySize > remaining {
 		status = domain.StatusWaitlisted
 	}
 
+	// 7. Encrypt sensitive notes (if any) via the locally-managed master key.
+	var secureBlob []byte
+	if in.SecureNotes != "" {
+		if s.encrypter == nil {
+			return nil, errors.New("secure notes requested but no encrypter is wired")
+		}
+		secureBlob, err = s.encrypter.Encrypt([]byte(in.SecureNotes))
+		if err != nil {
+			return nil, fmt.Errorf("encrypt secure_notes: %w", err)
+		}
+	}
+
 	b := &domain.Booking{
-		UserID:     in.UserID,
-		ResourceID: in.ResourceID,
-		GroupID:    in.GroupID,
-		PartySize:  in.PartySize,
-		StartTime:  in.StartTime,
-		EndTime:    in.EndTime,
-		Status:     status,
-		Notes:      in.Notes,
+		UserID:      in.UserID,
+		ResourceID:  in.ResourceID,
+		GroupID:     in.GroupID,
+		PartySize:   in.PartySize,
+		StartTime:   in.StartTime,
+		EndTime:     in.EndTime,
+		Status:      status,
+		Notes:       in.Notes,
+		SecureNotes: secureBlob,
 	}
 	if err := b.Validate(); err != nil {
 		return nil, err
@@ -142,7 +186,28 @@ func (s *BookingService) Create(ctx context.Context, in CreateInput) (*domain.Bo
 	}
 	s.log.Info("booking created",
 		"id", b.ID, "user_id", b.UserID, "resource_id", b.ResourceID,
-		"status", b.Status, "start", b.StartTime, "end", b.EndTime)
+		"status", b.Status, "start", b.StartTime, "end", b.EndTime,
+		"party_size", b.PartySize, "remaining_seats_before", remaining,
+	)
+	return b, nil
+}
+
+// GetForOwner returns a booking and decrypts secure notes ONLY when the
+// requesting user is the booking owner. Other callers see the booking but
+// not the plaintext.
+func (s *BookingService) GetForOwner(ctx context.Context, actorID, bookingID uuid.UUID) (*domain.Booking, error) {
+	b, err := s.bookings.Get(ctx, bookingID)
+	if err != nil {
+		return nil, err
+	}
+	if b.UserID == actorID && len(b.SecureNotes) > 0 && s.encrypter != nil {
+		plain, err := s.encrypter.Decrypt(b.SecureNotes)
+		if err != nil {
+			s.log.Warn("decrypt secure notes failed", "booking_id", b.ID, "error", err)
+		} else {
+			b.SecureNotesPlain = string(plain)
+		}
+	}
 	return b, nil
 }
 

@@ -1,0 +1,151 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/harborworks/booking-hub/internal/domain"
+)
+
+func todoBadge(s domain.TodoStatus) string {
+	switch s {
+	case domain.TodoOpen:
+		return "badge pending_confirmation"
+	case domain.TodoInProgress:
+		return "badge waitlisted"
+	case domain.TodoDone:
+		return "badge completed"
+	case domain.TodoDismissed:
+		return "badge canceled"
+	}
+	return "badge"
+}
+
+templ NotificationCenter(username string, notifications []domain.Notification, todos []domain.Todo, statusFilter string) {
+	@Layout("Notifications & to-do", username) {
+		<style>
+			.nc-row { padding:0.6rem 1rem; border-bottom:1px solid #1f4865; }
+			.nc-row:last-child { border-bottom:none; }
+			.nc-unread { border-left:3px solid var(--accent); }
+			.nc-filters { margin:0.5rem 0 1rem; }
+			.nc-filters a { margin-right:0.5rem; }
+			.nc-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+			@media (max-width:780px) { .nc-grid { grid-template-columns:1fr; } }
+		</style>
+		<h2>Notifications &amp; to-do center</h2>
+		<div class="nc-grid">
+			<div>
+				<h3>Notifications</h3>
+				if len(notifications) == 0 {
+					<div class="empty">All caught up — no notifications.</div>
+				} else {
+					<div class="card" style="padding:0;">
+						for _, n := range notifications {
+							<div class={ ncRowClass(n) }>
+								<strong>{ n.Title }</strong>
+								&nbsp;<span class="muted">· { string(n.Kind) }</span>
+								<div class="muted" style="font-size:0.8rem;">{ formatDateTime(n.CreatedAt) }</div>
+								if n.Body != "" {
+									<div>{ n.Body }</div>
+								}
+								if n.ReadAt == nil {
+									<button class="btn-inline" onclick={ markReadScript(n.ID.String()) }>mark read</button>
+								}
+							</div>
+						}
+					</div>
+				}
+			</div>
+
+			<div>
+				<h3>Actionable to-dos</h3>
+				<div class="nc-filters muted">
+					Filter:
+					<a href="/notifications?status=open">open</a>
+					<a href="/notifications?status=in_progress">in progress</a>
+					<a href="/notifications?status=done">done</a>
+					<a href="/notifications?status=">all</a>
+					if statusFilter != "" {
+						&nbsp;showing <strong>{ statusFilter }</strong>
+					}
+				</div>
+				if len(todos) == 0 {
+					<div class="empty">Nothing on your plate.</div>
+				} else {
+					<div class="card" style="padding:0;">
+						for _, t := range todos {
+							<div class="nc-row">
+								<strong>{ t.Title }</strong>
+								&nbsp;<span class={ todoBadge(t.Status) }>{ string(t.Status) }</span>
+								<div class="muted" style="font-size:0.8rem;">{ string(t.TaskType) } · { formatDateTime(t.CreatedAt) }</div>
+								<div class="actions">
+									if t.Status == domain.TodoOpen {
+										<button class="btn-inline" onclick={ todoStatusScript(t.ID.String(), "in_progress") }>start</button>
+									}
+									if t.Status == domain.TodoInProgress {
+										<button class="btn-inline" onclick={ todoStatusScript(t.ID.String(), "done") }>complete</button>
+									}
+									if t.Status != domain.TodoDismissed && t.Status != domain.TodoDone {
+										<button class="btn-inline" onclick={ todoStatusScript(t.ID.String(), "dismissed") }>dismiss</button>
+									}
+								</div>
+							</div>
+						}
+					</div>
+				}
+				<form id="newTodo" class="stacked" style="margin-top:1rem;max-width:480px;">
+					<h4>New to-do</h4>
+					<label>
+						Title
+						<input name="title" required/>
+					</label>
+					<label>
+						Type
+						<input name="task_type" placeholder="e.g. confirm_booking" required/>
+					</label>
+					<button type="submit">Create</button>
+				</form>
+				<script>
+					function ncMarkRead(id) {
+						fetch('/api/notifications/' + id + '/read', { method: 'POST' }).then(() => location.reload());
+					}
+					function ncTodoStatus(id, status) {
+						fetch('/api/todos/' + id + '/status', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ status }),
+						}).then(() => location.reload());
+					}
+					document.getElementById('newTodo').addEventListener('submit', async (e) => {
+						e.preventDefault();
+						const fd = new FormData(e.target);
+						const res = await fetch('/api/todos', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ title: fd.get('title'), task_type: fd.get('task_type'), payload: {} }),
+						});
+						if (res.ok) location.reload();
+						else alert('failed');
+					});
+				</script>
+			</div>
+		</div>
+	}
+}
+
+func ncRowClass(n domain.Notification) string {
+	if n.ReadAt == nil {
+		return "nc-row nc-unread"
+	}
+	return "nc-row"
+}
+
+script markReadScript(id string) {
+	ncMarkRead(id);
+}
+
+script todoStatusScript(id string, status string) {
+	ncTodoStatus(id, status);
+}
+
+// keep fmt referenced when none of the above call sites do.
+var _ = fmt.Sprintf

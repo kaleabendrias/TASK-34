@@ -11,6 +11,7 @@ import (
 	"github.com/harborworks/booking-hub/internal/api/middleware"
 	"github.com/harborworks/booking-hub/internal/domain"
 	"github.com/harborworks/booking-hub/internal/service"
+	"github.com/harborworks/booking-hub/internal/views"
 )
 
 type NotificationHandler struct {
@@ -133,4 +134,21 @@ func (h *NotificationHandler) AdminDeliveries(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"deliveries": out, "count": len(out)})
+}
+
+// GET /notifications — HTML notification & to-do center.
+func (h *NotificationHandler) CenterHTML(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	notifs, err := h.svc.List(c.Request.Context(), user.ID, false, 50)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	statusFilter := c.Query("status")
+	todos, err := h.svc.ListTodos(c.Request.Context(), user.ID, statusFilter, 50)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	renderTempl(c, http.StatusOK, views.NotificationCenter(usernameOf(user), notifs, todos, statusFilter))
 }

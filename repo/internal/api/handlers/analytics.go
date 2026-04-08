@@ -11,6 +11,7 @@ import (
 	"github.com/harborworks/booking-hub/internal/api/middleware"
 	"github.com/harborworks/booking-hub/internal/domain"
 	"github.com/harborworks/booking-hub/internal/service"
+	"github.com/harborworks/booking-hub/internal/views"
 )
 
 type AnalyticsHandler struct {
@@ -94,4 +95,29 @@ func (h *AnalyticsHandler) Anomalies(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"anomalies": out, "count": len(out)})
+}
+
+// GET /admin/analytics — admin offline-analytics dashboard.
+func (h *AnalyticsHandler) DashboardHTML(c *gin.Context) {
+	u := middleware.CurrentUser(c)
+	if u == nil || !u.IsAdmin {
+		c.String(http.StatusForbidden, "admin only")
+		return
+	}
+	eventType := c.DefaultQuery("event_type", "view")
+	ctx := c.Request.Context()
+
+	top, _ := h.svc.TopSessions(ctx, 7, 10)
+	trends, _ := h.svc.Trends(ctx, domain.AnalyticsEventType(eventType))
+	anomalies, _ := h.svc.Anomalies(ctx, 20)
+
+	renderTempl(c, http.StatusOK, views.AdminAnalyticsPage(views.AdminAnalyticsPageData{
+		Username:  u.Username,
+		Top:       top,
+		Day7:      trends[7],
+		Day30:     trends[30],
+		Day90:     trends[90],
+		Anomalies: anomalies,
+		EventType: eventType,
+	}))
 }

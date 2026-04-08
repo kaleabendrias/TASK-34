@@ -1,0 +1,194 @@
+package views
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/harborworks/booking-hub/internal/domain"
+	"github.com/harborworks/booking-hub/internal/service"
+)
+
+func gbStatusBadge(s string) string {
+	switch s {
+	case "met":
+		return "badge checked_in"
+	case "finalized":
+		return "badge completed"
+	case "expired":
+		return "badge canceled"
+	case "canceled":
+		return "badge canceled"
+	default:
+		return "badge pending_confirmation"
+	}
+}
+
+func gbProgressPct(g domain.GroupBuy) int {
+	if g.Threshold == 0 {
+		return 0
+	}
+	pct := (g.Confirmed() * 100) / g.Threshold
+	if pct > 100 {
+		pct = 100
+	}
+	return pct
+}
+
+func gbBar(g domain.GroupBuy) templ.Component {
+	pct := gbProgressPct(g)
+	cls := "gb-bar-fill"
+	if g.Status == domain.GroupBuyExpired {
+		cls = "gb-bar-fill gb-failed"
+	}
+	return templ.Raw(fmt.Sprintf(`<div class="gb-bar"><div class="%s" style="width:%d%%"></div></div>`, cls, pct))
+}
+
+func gbDeadlineHuman(g domain.GroupBuy) string {
+	left := time.Until(g.Deadline)
+	if left <= 0 {
+		return "deadline passed"
+	}
+	hours := int(left.Hours())
+	if hours >= 1 {
+		return fmt.Sprintf("%dh %dm left", hours, int(left.Minutes())%60)
+	}
+	return fmt.Sprintf("%dm left", int(left.Minutes()))
+}
+
+func gbHeadline(g domain.GroupBuy) string {
+	switch g.Status {
+	case domain.GroupBuyOpen:
+		if g.ThresholdMet() {
+			return "Threshold met — awaiting deadline"
+		}
+		return "Open — recruiting"
+	case domain.GroupBuyMet:
+		return "Threshold met — awaiting finalisation"
+	case domain.GroupBuyFinalized:
+		return "Finalised ✓"
+	case domain.GroupBuyExpired:
+		return "Failed: deadline passed below threshold"
+	case domain.GroupBuyCanceled:
+		return "Cancelled"
+	}
+	return string(g.Status)
+}
+
+templ GroupBuyIndex(username string, buys []domain.GroupBuy) {
+	@Layout("Group buys", username) {
+		<style>
+			.gb-bar { width:100%; height:14px; background:#1f4865; border-radius:7px; overflow:hidden; margin-top:6px; }
+			.gb-bar-fill { height:100%; background: var(--accent); }
+			.gb-failed { background: var(--err); }
+			.gb-card { padding:1rem 1.25rem; margin-bottom:1rem; }
+			.gb-meta { color: var(--muted); font-size:0.85rem; }
+		</style>
+		<h2>Group buys</h2>
+		if len(buys) == 0 {
+			<div class="empty">No group buys yet. Use <code>POST /api/group-buys</code> to start one.</div>
+		} else {
+			for _, g := range buys {
+				<div class="card gb-card">
+					<h3 style="margin:0;">
+						<a href={ templ.SafeURL("/group-buys/" + g.ID.String()) }>{ g.Title }</a>
+						&nbsp;<span class={ gbStatusBadge(string(g.Status)) }>{ string(g.Status) }</span>
+					</h3>
+					<p class="gb-meta">{ gbHeadline(g) } · { gbDeadlineHuman(g) }</p>
+					<p>{ fmt.Sprintf("%d / %d confirmed (capacity %d)", g.Confirmed(), g.Threshold, g.Capacity) }</p>
+					@gbBar(g)
+				</div>
+			}
+		}
+	}
+}
+
+templ GroupBuyDetail(username string, g domain.GroupBuy, progress *service.Progress, participants []map[string]any, isMember bool) {
+	@Layout("Group buy: " + g.Title, username) {
+		<style>
+			.gb-bar { width:100%; height:18px; background:#1f4865; border-radius:9px; overflow:hidden; margin:0.5rem 0 1rem; }
+			.gb-bar-fill { height:100%; background: var(--accent); transition: width 0.3s; }
+			.gb-failed { background: var(--err); }
+		</style>
+		<h2>{ g.Title } &nbsp;<span class={ gbStatusBadge(string(g.Status)) }>{ string(g.Status) }</span></h2>
+		<p class="muted">{ gbHeadline(g) } · { gbDeadlineHuman(g) }</p>
+
+		if g.Status == domain.GroupBuyExpired || g.Status == domain.GroupBuyCanceled {
+			<div class="error">
+				<strong>This group buy did not succeed.</strong>
+				if g.Status == domain.GroupBuyExpired {
+					Threshold of { fmt.Sprintf("%d", g.Threshold) } seats was not reached before the deadline.
+				} else {
+					The organiser cancelled it.
+				}
+				No charges are made; participants are released.
+			</div>
+		} else if g.Status == domain.GroupBuyFinalized {
+			<div class="ok">
+				<strong>Finalised.</strong> { fmt.Sprintf("%d seats confirmed.", g.Confirmed()) }
+			</div>
+		}
+
+		<p>{ g.Description }</p>
+
+		<div class="card">
+			<p style="margin:0;">
+				<strong>{ fmt.Sprintf("%d / %d seats confirmed", g.Confirmed(), g.Threshold) }</strong>
+				if progress != nil {
+					&nbsp;· { fmt.Sprintf("%d remaining out of %d capacity", progress.RemainingSlots, progress.Capacity) }
+				}
+			</p>
+			@gbBar(g)
+			<p class="muted" style="margin:0;">
+				Window: { formatDateTime(g.StartsAt) } → { formatDateTime(g.EndsAt) }<br/>
+				Deadline: { formatDateTime(g.Deadline) }
+			</p>
+		</div>
+
+		if username != "" && g.Status == domain.GroupBuyOpen {
+			if isMember {
+				<p class="ok" style="margin:0;">You have already joined this group buy.</p>
+			} else {
+				<form id="gbJoin" class="stacked" style="max-width:300px;">
+					<label>
+						Quantity
+						<input type="number" name="quantity" min="1" value="1" required/>
+					</label>
+					<button type="submit">Join group buy</button>
+				</form>
+				<script>
+					document.getElementById('gbJoin').addEventListener('submit', async (e) => {
+						e.preventDefault();
+						const qty = parseInt(e.target.quantity.value, 10);
+						const key = 'ui-' + crypto.randomUUID();
+						const res = await fetch(window.location.pathname.replace('/group-buys/', '/api/group-buys/') + '/join', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
+							body: JSON.stringify({ quantity: qty }),
+						});
+						if (res.ok) { window.location.reload(); return; }
+						const data = await res.json().catch(() => ({}));
+						alert('Join failed: ' + (data.error || res.statusText));
+					});
+				</script>
+			}
+		}
+
+		<h3>Participants</h3>
+		if len(participants) == 0 {
+			<div class="empty">Nobody has joined yet. Be the first.</div>
+		} else {
+			<table>
+				<thead><tr><th>Member</th><th>Seats</th><th>Joined</th></tr></thead>
+				<tbody>
+					for _, p := range participants {
+						<tr>
+							<td>{ fmt.Sprintf("%v", p["masked_name"]) }</td>
+							<td>{ fmt.Sprintf("%v", p["quantity"]) }</td>
+							<td>{ fmt.Sprintf("%v", p["joined_at"]) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}

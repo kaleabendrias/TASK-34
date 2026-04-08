@@ -14,6 +14,17 @@ func formatTimeRange(start, end time.Time) string {
 
 func todayISO() string { return time.Now().UTC().Format("2006-01-02") }
 
+func slotBadgeClass(s service.SlotCapacity) string {
+	switch {
+	case s.RemainingSeats == 0:
+		return "badge canceled"
+	case s.RemainingSeats < s.Capacity/2 && s.Capacity > 1:
+		return "badge waitlisted"
+	default:
+		return "badge checked_in"
+	}
+}
+
 templ AvailabilityPage(username string, resources []domain.Resource, result *service.AvailabilityResult) {
 	@Layout("Availability", username) {
 		<h2>Availability search</h2>
@@ -23,7 +34,7 @@ templ AvailabilityPage(username string, resources []domain.Resource, result *ser
 					Resource
 					<select name="resource_id" required>
 						for _, r := range resources {
-							<option value={ r.ID.String() }>{ r.Name }</option>
+							<option value={ r.ID.String() }>{ r.Name } (capacity { fmt.Sprintf("%d", r.Capacity) })</option>
 						}
 					</select>
 				</label>
@@ -37,15 +48,38 @@ templ AvailabilityPage(username string, resources []domain.Resource, result *ser
 		if result != nil {
 			<h3>{ result.Resource.Name } · { result.Date }</h3>
 			<p class="muted">{ result.Resource.Description }</p>
-			<h4>Free windows (08:00–22:00 UTC)</h4>
-			if len(result.Free) == 0 {
-				<div class="empty">Fully booked.</div>
+			<p>
+				<strong>Total capacity:</strong> { fmt.Sprintf("%d", result.TotalCapacity) } seats &nbsp;·&nbsp;
+				<strong>Peak active party:</strong> { fmt.Sprintf("%d", result.PeakActiveParty) } &nbsp;·&nbsp;
+				<strong>Min remaining (worst slot):</strong> { fmt.Sprintf("%d", result.MinRemaining) }
+			</p>
+			<h4>Per-slot capacity (08:00–22:00 UTC)</h4>
+			if len(result.Slots) == 0 {
+				<div class="empty">No slot data.</div>
 			} else {
 				<table>
-					<thead><tr><th>Window</th></tr></thead>
+					<thead>
+						<tr>
+							<th>Window</th>
+							<th>Active party</th>
+							<th>Remaining seats</th>
+							<th>Status</th>
+						</tr>
+					</thead>
 					<tbody>
-						for _, w := range result.Free {
-							<tr><td>{ formatTimeRange(w.StartTime, w.EndTime) }</td></tr>
+						for _, sl := range result.Slots {
+							<tr>
+								<td>{ formatTimeRange(sl.StartTime, sl.EndTime) }</td>
+								<td>{ fmt.Sprintf("%d / %d", sl.ActivePartySize, sl.Capacity) }</td>
+								<td><strong>{ fmt.Sprintf("%d", sl.RemainingSeats) }</strong></td>
+								<td>
+									if sl.Available {
+										<span class={ slotBadgeClass(sl) }>open</span>
+									} else {
+										<span class="badge canceled">full</span>
+									}
+								</td>
+							</tr>
 						}
 					</tbody>
 				</table>
@@ -55,11 +89,12 @@ templ AvailabilityPage(username string, resources []domain.Resource, result *ser
 				<div class="empty">No bookings on this date.</div>
 			} else {
 				<table>
-					<thead><tr><th>Window</th><th>Status</th></tr></thead>
+					<thead><tr><th>Window</th><th>Party</th><th>Status</th></tr></thead>
 					<tbody>
 						for _, b := range result.Booked {
 							<tr>
 								<td>{ formatTimeRange(b.StartTime, b.EndTime) }</td>
+								<td>{ fmt.Sprintf("%d", b.PartySize) }</td>
 								<td><span class={ "badge", string(b.Status) }>{ string(b.Status) }</span></td>
 							</tr>
 						}

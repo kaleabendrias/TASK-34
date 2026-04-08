@@ -25,6 +25,50 @@ func TestMaskName(t *testing.T) {
 	}
 }
 
+func TestMaskEmail(t *testing.T) {
+	cases := map[string]string{
+		"":                   "",
+		"alice@example.com":  "a****@example.com",
+		"a@example.com":      "a*@example.com",
+		"plainstring":        "p**********",
+		"@only.tld":          "@***.***",
+	}
+	for in, want := range cases {
+		got := domain.MaskEmail(in)
+		// The "@only.tld" case is degenerate (empty local part) — assert
+		// only that the local part stays empty AND the email is in some
+		// way still masked.
+		if in == "@only.tld" {
+			if got == "" || len(got) == len(in) && got == in {
+				t.Errorf("MaskEmail(%q) = %q (must be masked)", in, got)
+			}
+			continue
+		}
+		if got != want {
+			t.Errorf("MaskEmail(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestGroupReservationMaskedView(t *testing.T) {
+	g := domain.GroupReservation{
+		Name:           "Marina Wedding",
+		OrganizerName:  "Alex Rivera",
+		OrganizerEmail: "alex@example.com",
+	}
+	masked := g.MaskedView()
+	if masked.OrganizerName == g.OrganizerName {
+		t.Errorf("name should be masked")
+	}
+	if masked.OrganizerEmail == g.OrganizerEmail {
+		t.Errorf("email should be masked")
+	}
+	// The original is unchanged.
+	if g.OrganizerName == masked.OrganizerName {
+		t.Errorf("masking should not mutate the original")
+	}
+}
+
 func TestBookingStatusActiveAndTerminal(t *testing.T) {
 	active := []domain.BookingStatus{
 		domain.StatusPendingConfirmation,

@@ -57,7 +57,7 @@ func TestErrorBranches_BadJSONOnEveryPost(t *testing.T) {
 		{newClient(t), "/api/auth/register"},
 		{newClient(t), "/api/auth/login"},
 		{logged, "/api/bookings"},
-		{newClient(t), "/api/groups"},
+		{logged, "/api/groups"},
 		{logged, "/api/group-buys"},
 		{logged, "/api/documents/confirmation"},
 		{logged, "/api/documents/checkin-pass"},

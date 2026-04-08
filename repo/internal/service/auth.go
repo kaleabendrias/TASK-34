@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/harborworks/booking-hub/internal/domain"
@@ -234,6 +235,31 @@ func (s *AuthService) ResolveSession(ctx context.Context, sessionID string) (*do
 	sess.LastActivityAt = now
 	sess.ExpiresAt = newExpires
 	return user, sess, nil
+}
+
+// ChangePassword validates the current password, the new password against
+// the policy, and bcrypt-hashes the new value before storing it. The
+// must_rotate_password flag is cleared as a side effect of UpdatePasswordHash.
+func (s *AuthService) ChangePassword(ctx context.Context, userID uuid.UUID, current, next string) error {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(current)); err != nil {
+		return domain.ErrCredentialInvalid
+	}
+	if err := domain.ValidatePassword(next); err != nil {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(next), s.cfg.BcryptCost)
+	if err != nil {
+		return fmt.Errorf("hash new password: %w", err)
+	}
+	if err := s.users.UpdatePasswordHash(ctx, userID, string(hash)); err != nil {
+		return err
+	}
+	s.log.Info("password rotated", "user_id", userID)
+	return nil
 }
 
 func (s *AuthService) Logout(ctx context.Context, sessionID string) error {

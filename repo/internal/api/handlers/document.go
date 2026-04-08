@@ -11,6 +11,7 @@ import (
 	"github.com/harborworks/booking-hub/internal/api/middleware"
 	"github.com/harborworks/booking-hub/internal/domain"
 	"github.com/harborworks/booking-hub/internal/service"
+	"github.com/harborworks/booking-hub/internal/views"
 )
 
 type DocumentHandler struct {
@@ -154,4 +155,26 @@ func (h *DocumentHandler) Content(c *gin.Context) {
 	}
 	c.Status(http.StatusOK)
 	_, _ = c.Writer.Write(rev.Content)
+}
+
+// GET /documents — HTML document center with full revision history.
+func (h *DocumentHandler) CenterHTML(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	docs, err := h.svc.ListByOwner(c.Request.Context(), user.ID)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	// Eager-load revisions for each document so the dashboard can display
+	// the full history with `superseded` badges in a single render.
+	full := make([]domain.Document, 0, len(docs))
+	for _, d := range docs {
+		fd, err := h.svc.Get(c.Request.Context(), d.ID)
+		if err != nil {
+			full = append(full, d)
+			continue
+		}
+		full = append(full, *fd)
+	}
+	renderTempl(c, http.StatusOK, views.DocumentCenter(usernameOf(user), full))
 }

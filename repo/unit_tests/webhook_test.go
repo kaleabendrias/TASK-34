@@ -27,7 +27,39 @@ func TestWebhookBackoffSchedule(t *testing.T) {
 	}
 }
 
-func TestWebhookRetryCap(t *testing.T) {
+func TestValidateWebhookTargetURL_Allowed(t *testing.T) {
+	allowed := []string{
+		"http://127.0.0.1:9000/hook",
+		"http://localhost:8080/path",
+		"http://app:8080/x",
+		"http://10.0.0.5/x",
+		"https://192.168.1.20/y",
+	}
+	for _, raw := range allowed {
+		if _, err := service.ValidateWebhookTargetURL(raw); err != nil {
+			t.Errorf("expected %q to be allowed, got %v", raw, err)
+		}
+	}
+}
+
+func TestValidateWebhookTargetURL_Rejected(t *testing.T) {
+	type tc struct{ raw, why string }
+	cases := []tc{
+		{"", "empty"},
+		{"://broken", "parse"},
+		{"ftp://localhost/", "scheme"},
+		{"http:///nohost", "missing host"},
+		{"http://8.8.8.8/", "non-local IP"},
+		{"http://example.com/", "public hostname"},
+	}
+	for _, c := range cases {
+		if _, err := service.ValidateWebhookTargetURL(c.raw); err == nil {
+			t.Errorf("expected %q to be rejected (%s)", c.raw, c.why)
+		}
+	}
+}
+
+func TestNextWebhookStatus_RetryCap(t *testing.T) {
 	// Up to attempt 4 we keep retrying.
 	for i := 1; i < service.WebhookMaxAttempts; i++ {
 		if got := service.NextWebhookStatus(i); got != "pending" {

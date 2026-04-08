@@ -117,10 +117,18 @@ func (s *GovernanceService) PendingDeletion(ctx context.Context, userID uuid.UUI
 	return s.repo.GetDeletionRequest(ctx, userID)
 }
 
-// RunDeletionExecutor is the background-job step that hard-deletes any user
-// whose 7-day delay has elapsed. Bookings owned by the user are flagged
-// `user_anonymized = TRUE`, the user row is anonymized in place, and the
-// analytics anon hash is nulled out so trends are preserved without PII.
+// RunDeletionExecutor is the background-job step that processes every
+// deletion request whose 7-day grace window has elapsed. For each request:
+//
+//  1. Analytics events are detached: the per-user salted hash is set to NULL
+//     so the rows survive as anonymized aggregates with no link back.
+//  2. The user row is hard-deleted. Migration 0003 makes every dependent
+//     FK either CASCADE (sessions, bookings, documents/revisions, todos,
+//     notifications, consent_records, group_buy_participants, deletion_
+//     requests) or SET NULL (group_buys.organizer_id), so a single DELETE
+//     removes every personal-data row in one transaction.
+//
+// The deletion is logged with the user id only (no PII).
 func (s *GovernanceService) RunDeletionExecutor(ctx context.Context) error {
 	now := time.Now().UTC()
 	due, err := s.repo.ListDuePending(ctx, now)
@@ -128,27 +136,26 @@ func (s *GovernanceService) RunDeletionExecutor(ctx context.Context) error {
 		return err
 	}
 	for _, d := range due {
-		if err := s.executeOne(ctx, d); err != nil {
+		if err := s.hardDeleteOne(ctx, d); err != nil {
 			s.log.Warn("deletion executor failed", "user_id", d.UserID, "error", err)
 		}
 	}
 	return nil
 }
 
-func (s *GovernanceService) executeOne(ctx context.Context, d domain.DeletionRequest) error {
-	// 1. Anonymize analytics events for this user.
+func (s *GovernanceService) hardDeleteOne(ctx context.Context, d domain.DeletionRequest) error {
+	// 1. Detach analytics first (uses the salted hash, not the user_id, so
+	//    it must run before the user row is gone).
 	if err := s.analytics.AnonymiseUserEvents(ctx, d.UserID); err != nil {
-		return fmt.Errorf("anon analytics: %w", err)
+		return fmt.Errorf("anonymise analytics: %w", err)
 	}
-	// 2. Anonymize user row (preserves FK targets).
-	if err := s.users.Anonymize(ctx, d.UserID); err != nil {
-		return fmt.Errorf("anon user: %w", err)
+	// 2. Hard delete. Cascades + SET NULL handle every dependent table.
+	if err := s.users.HardDelete(ctx, d.UserID); err != nil {
+		return fmt.Errorf("hard delete user: %w", err)
 	}
-	// 3. Mark the deletion request complete.
-	if err := s.repo.MarkDeletionComplete(ctx, d.ID, time.Now().UTC()); err != nil {
-		return err
-	}
-	s.log.Info("user deletion completed", "user_id", d.UserID)
+	// 3. The deletion_requests row is gone via cascade — log the event so
+	//    auditors can correlate. Only the user id (a UUID) appears here.
+	s.log.Info("user hard-deleted", "user_id", d.UserID, "request_id", d.ID)
 	return nil
 }
 
@@ -232,19 +239,39 @@ func ValidateResourcesCSV(body io.Reader) (parsed []ParsedResourceRow, errs []CS
 	return parsed, nil, nil
 }
 
-// ImportResourcesCSV parses a CSV with the columns name,description,capacity
-// and inserts (idempotent on name) any well-formed rows. Validation errors
-// are collected per-row; the import is **all-or-nothing** — if any row fails
-// no rows are inserted.
-func (s *GovernanceService) ImportResourcesCSV(ctx context.Context, body io.Reader) (int, []CSVValidationError, error) {
-	parsed, errs, fatal := ValidateResourcesCSV(body)
+// ImportResourcesCSV parses a CSV with the columns name,description,capacity,
+// validates every row, and persists the surviving rows inside a single
+// transaction. Any validation error or insert error rolls back the whole
+// transaction; the returned `inserted` count is the number of rows actually
+// committed (always 0 on the failure paths).
+func (s *GovernanceService) ImportResourcesCSV(ctx context.Context, body io.Reader) (inserted int, errs []CSVValidationError, fatal error) {
+	parsed, validationErrs, fatal := ValidateResourcesCSV(body)
 	if fatal != nil {
 		return 0, nil, fatal
 	}
-	if len(errs) > 0 {
-		return 0, errs, nil
+	if len(validationErrs) > 0 {
+		return 0, validationErrs, nil
 	}
-	return len(parsed), nil, nil
+
+	rows := make([]domain.Resource, 0, len(parsed))
+	for _, p := range parsed {
+		rows = append(rows, domain.Resource{
+			Name:        p.Name,
+			Description: p.Description,
+			Capacity:    p.Capacity,
+		})
+	}
+
+	// All-or-nothing transactional insert. If a row collides with an existing
+	// resource (unique name), the whole transaction is rolled back and the
+	// caller learns about it via fatal.
+	n, err := s.resources.InsertManyTx(ctx, rows)
+	if err != nil {
+		s.log.Warn("csv import rolled back", "error", err)
+		return 0, nil, fmt.Errorf("import rolled back: %w", err)
+	}
+	s.log.Info("csv import committed", "rows", n)
+	return n, nil, nil
 }
 
 // ExportResourcesCSV writes resources as CSV to the supplied writer.

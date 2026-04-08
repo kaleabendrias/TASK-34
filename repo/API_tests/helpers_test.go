@@ -7,11 +7,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// osReadFile is a thin alias so the helpers file does not import os twice.
+func osReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
 // Deterministic fixture builder. Each call returns a unique username so
 // concurrent test packages don't collide.
@@ -104,16 +108,69 @@ func expectStatus(t *testing.T, resp *http.Response, body []byte, want int) {
 	}
 }
 
+// adminCurrentPassword tracks the live admin password across the test suite.
+// Reads happen on first login and after every rotation. Tests share the
+// same admin user, so once one test rotates the password, every later test
+// must use the new value.
+var adminCurrentPassword = "" // empty → fall back to one-time file
+
 // loginAsAdmin returns a logged-in client for the seeded harbormaster user.
+// On first call it reads the one-time password file written by the seed,
+// performs the forced rotation, and caches the new value for the rest of
+// the suite.
 func loginAsAdmin(t *testing.T) *Client {
 	t.Helper()
+	if adminCurrentPassword == "" {
+		bootstrapAdmin(t)
+	}
 	c := newClient(t)
 	resp, body := c.doJSON(t, "POST", "/api/auth/login", map[string]string{
 		"username": "harbormaster",
-		"password": "Harbor@Works2026!",
+		"password": adminCurrentPassword,
 	}, nil)
 	expectStatus(t, resp, body, http.StatusOK)
 	return c
+}
+
+// bootstrapAdmin reads the one-time secret file written by the application
+// seed, signs the admin in with it, then immediately rotates to a known
+// test-only password so the rest of the suite can use it.
+func bootstrapAdmin(t *testing.T) {
+	t.Helper()
+	const path = "/app/keys/initial_admin_password"
+	raw, err := readFileTrim(path)
+	if err != nil {
+		t.Fatalf("read initial admin password file %s: %v", path, err)
+	}
+
+	// First login.
+	c := newClient(t)
+	resp, body := c.doJSON(t, "POST", "/api/auth/login", map[string]string{
+		"username": "harbormaster",
+		"password": raw,
+	}, nil)
+	expectStatus(t, resp, body, http.StatusOK)
+
+	// Rotate to a deterministic test password.
+	const next = "Harbor@TestSuite2026!"
+	resp, body = c.doJSON(t, "POST", "/api/auth/change-password", map[string]string{
+		"current_password": raw,
+		"new_password":     next,
+	}, nil)
+	expectStatus(t, resp, body, http.StatusOK)
+	adminCurrentPassword = next
+}
+
+func readFileTrim(path string) (string, error) {
+	data, err := osReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	// Strip trailing newline.
+	for len(data) > 0 && (data[len(data)-1] == '\n' || data[len(data)-1] == '\r') {
+		data = data[:len(data)-1]
+	}
+	return string(data), nil
 }
 
 // registerAndLogin creates a fresh user and returns a logged-in client.

@@ -30,12 +30,13 @@ func NewBookingHandler(svc *service.BookingService, resource *service.ResourceSe
 // ---------- requests ----------
 
 type bookingRequest struct {
-	ResourceID string `json:"resource_id" form:"resource_id" binding:"required"`
-	GroupID    string `json:"group_id"    form:"group_id"`
-	PartySize  int    `json:"party_size"  form:"party_size"`
-	StartTime  string `json:"start_time"  form:"start_time" binding:"required"`
-	EndTime    string `json:"end_time"    form:"end_time"   binding:"required"`
-	Notes      string `json:"notes"       form:"notes"`
+	ResourceID  string `json:"resource_id"  form:"resource_id" binding:"required"`
+	GroupID     string `json:"group_id"     form:"group_id"`
+	PartySize   int    `json:"party_size"   form:"party_size"`
+	StartTime   string `json:"start_time"   form:"start_time"  binding:"required"`
+	EndTime     string `json:"end_time"     form:"end_time"    binding:"required"`
+	Notes       string `json:"notes"        form:"notes"`
+	SecureNotes string `json:"secure_notes" form:"secure_notes"`
 }
 
 type transitionRequest struct {
@@ -80,12 +81,13 @@ func (h *BookingHandler) Create(c *gin.Context) {
 		return
 	}
 	in := service.CreateInput{
-		UserID:     user.ID,
-		ResourceID: rid,
-		PartySize:  req.PartySize,
-		StartTime:  start,
-		EndTime:    end,
-		Notes:      req.Notes,
+		UserID:      user.ID,
+		ResourceID:  rid,
+		PartySize:   req.PartySize,
+		StartTime:   start,
+		EndTime:     end,
+		Notes:       req.Notes,
+		SecureNotes: req.SecureNotes,
 	}
 	if req.GroupID != "" {
 		gid, err := uuid.Parse(req.GroupID)
@@ -125,7 +127,9 @@ func (h *BookingHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-	b, err := h.svc.Get(c.Request.Context(), id)
+	// GetForOwner decrypts secure_notes only when the actor is the booking
+	// owner; non-owners get a 403 here regardless of decryption.
+	b, err := h.svc.GetForOwner(c.Request.Context(), user.ID, id)
 	if err != nil {
 		writeServiceError(c, err)
 		return

@@ -37,18 +37,19 @@ var (
 // ---------- USER ----------
 
 type User struct {
-	ID              uuid.UUID  `json:"id"`
-	Username        string     `json:"username"`
-	PasswordHash    string     `json:"-"`
-	IsBlacklisted   bool       `json:"is_blacklisted"`
-	BlacklistReason string     `json:"blacklist_reason,omitempty"`
-	IsAdmin         bool       `json:"is_admin"`
-	AnonymizedAt    *time.Time `json:"anonymized_at,omitempty"`
-	FailedAttempts  int        `json:"-"`
-	LockedUntil     *time.Time `json:"-"`
-	LastLoginAt     *time.Time `json:"last_login_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                 uuid.UUID  `json:"id"`
+	Username           string     `json:"username"`
+	PasswordHash       string     `json:"-"`
+	IsBlacklisted      bool       `json:"is_blacklisted"`
+	BlacklistReason    string     `json:"blacklist_reason,omitempty"`
+	IsAdmin            bool       `json:"is_admin"`
+	MustRotatePassword bool       `json:"must_rotate_password"`
+	AnonymizedAt       *time.Time `json:"anonymized_at,omitempty"`
+	FailedAttempts     int        `json:"-"`
+	LockedUntil        *time.Time `json:"-"`
+	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // MaskName returns a privacy-preserving version of a username for "shared
@@ -142,17 +143,22 @@ func (s BookingStatus) IsTerminal() bool {
 }
 
 type Booking struct {
-	ID         uuid.UUID     `json:"id"`
-	UserID     uuid.UUID     `json:"user_id"`
-	ResourceID uuid.UUID     `json:"resource_id"`
-	GroupID    *uuid.UUID    `json:"group_id,omitempty"`
-	PartySize  int           `json:"party_size"`
-	StartTime  time.Time     `json:"start_time"`
-	EndTime    time.Time     `json:"end_time"`
-	Status     BookingStatus `json:"status"`
-	Notes      string        `json:"notes,omitempty"`
-	CreatedAt  time.Time     `json:"created_at"`
-	UpdatedAt  time.Time     `json:"updated_at"`
+	ID          uuid.UUID     `json:"id"`
+	UserID      uuid.UUID     `json:"user_id"`
+	ResourceID  uuid.UUID     `json:"resource_id"`
+	GroupID     *uuid.UUID    `json:"group_id,omitempty"`
+	PartySize   int           `json:"party_size"`
+	StartTime   time.Time     `json:"start_time"`
+	EndTime     time.Time     `json:"end_time"`
+	Status      BookingStatus `json:"status"`
+	Notes       string        `json:"notes,omitempty"`
+	// SecureNotes carries the AES-GCM ciphertext as it lives on disk; the
+	// JSON shape never serialises it. The booking service decrypts and
+	// surfaces SecureNotesPlain for the owner only.
+	SecureNotes      []byte    `json:"-"`
+	SecureNotesPlain string    `json:"secure_notes,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // Validate enforces invariants that hold regardless of persistence layer.
@@ -175,16 +181,58 @@ func (b *Booking) Validate() error {
 // ---------- GROUP RESERVATION ----------
 
 type GroupReservation struct {
-	ID             uuid.UUID `json:"id"`
-	Name           string    `json:"name"`
-	OrganizerName  string    `json:"organizer_name"`
-	OrganizerEmail string    `json:"organizer_email"`
-	Capacity       int       `json:"capacity"`
-	Notes          string    `json:"notes"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             uuid.UUID  `json:"id"`
+	Name           string     `json:"name"`
+	OrganizerID    *uuid.UUID `json:"organizer_id,omitempty"`
+	OrganizerName  string     `json:"organizer_name"`
+	OrganizerEmail string     `json:"organizer_email"`
+	Capacity       int        `json:"capacity"`
+	Notes          string     `json:"notes"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 
 	Bookings []Booking `json:"bookings,omitempty"`
+}
+
+// MaskedView returns a copy of the group reservation with organizer PII
+// fields replaced with privacy-preserving masks. Use this for shared views
+// (anonymous browse, non-owner reads) so the email and full name are never
+// leaked over the wire. Owners and admins should NOT call this method —
+// they get the raw struct.
+func (g GroupReservation) MaskedView() GroupReservation {
+	g.OrganizerName = MaskName(g.OrganizerName)
+	g.OrganizerEmail = MaskEmail(g.OrganizerEmail)
+	return g
+}
+
+// MaskEmail returns "f***@example.com" style masks: keep the first letter
+// of the local part, replace the rest with asterisks, leave the domain.
+// An empty input returns an empty string.
+func MaskEmail(email string) string {
+	if email == "" {
+		return ""
+	}
+	at := -1
+	for i, r := range email {
+		if r == '@' {
+			at = i
+			break
+		}
+	}
+	if at <= 0 {
+		// Not a real email; mask everything but the first character.
+		return MaskName(email)
+	}
+	local := email[:at]
+	domain := email[at:]
+	if len(local) == 1 {
+		return local + "*" + domain
+	}
+	out := []byte(local)
+	for i := 1; i < len(out); i++ {
+		out[i] = '*'
+	}
+	return string(out) + domain
 }
 
 func (g *GroupReservation) Validate() error {

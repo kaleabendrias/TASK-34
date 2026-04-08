@@ -143,7 +143,7 @@ func (h *GovernanceHandler) ImportResources(c *gin.Context) {
 		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "would_insert": count})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "inserted": count})
 }
 
 // GET /api/admin/export/resources.csv

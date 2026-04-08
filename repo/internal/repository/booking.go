@@ -38,7 +38,7 @@ func NewBookingRepository(pool *pgxpool.Pool) BookingRepository {
 
 const bookingColumns = `
 	id, user_id, resource_id, group_id, party_size,
-	start_time, end_time, status, notes, created_at, updated_at
+	start_time, end_time, status, notes, secure_notes, created_at, updated_at
 `
 
 func (r *bookingRepo) Create(ctx context.Context, b *domain.Booking) error {
@@ -54,12 +54,12 @@ func (r *bookingRepo) Create(ctx context.Context, b *domain.Booking) error {
 
 	const q = `
 		INSERT INTO bookings (id, user_id, resource_id, group_id, party_size,
-		                      start_time, end_time, status, notes, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		                      start_time, end_time, status, notes, secure_notes, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	`
 	_, err := r.pool.Exec(ctx, q,
 		b.ID, b.UserID, b.ResourceID, b.GroupID, b.PartySize,
-		b.StartTime, b.EndTime, string(b.Status), b.Notes, b.CreatedAt, b.UpdatedAt,
+		b.StartTime, b.EndTime, string(b.Status), b.Notes, b.SecureNotes, b.CreatedAt, b.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert booking: %w", err)
@@ -220,18 +220,20 @@ func sanitisePaging(limit, offset int) (int, int) {
 
 func scanBooking(s rowScanner) (*domain.Booking, error) {
 	var (
-		b       domain.Booking
-		groupID *uuid.UUID
-		status  string
+		b           domain.Booking
+		groupID     *uuid.UUID
+		status      string
+		secureNotes []byte
 	)
 	if err := s.Scan(
 		&b.ID, &b.UserID, &b.ResourceID, &groupID, &b.PartySize,
-		&b.StartTime, &b.EndTime, &status, &b.Notes, &b.CreatedAt, &b.UpdatedAt,
+		&b.StartTime, &b.EndTime, &status, &b.Notes, &secureNotes, &b.CreatedAt, &b.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
 	b.GroupID = groupID
 	b.Status = domain.BookingStatus(status)
+	b.SecureNotes = secureNotes
 	return &b, nil
 }
 
