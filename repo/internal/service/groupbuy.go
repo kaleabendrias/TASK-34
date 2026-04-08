@@ -81,9 +81,10 @@ func (s *GroupBuyService) Create(ctx context.Context, in CreateGroupBuyInput) (*
 		}
 	}
 
+	organizerID := in.OrganizerID
 	g := &domain.GroupBuy{
 		ResourceID:  in.ResourceID,
-		OrganizerID: in.OrganizerID,
+		OrganizerID: &organizerID,
 		Title:       in.Title,
 		Description: in.Description,
 		Threshold:   threshold,
@@ -224,12 +225,15 @@ func (s *GroupBuyService) SweepExpired(ctx context.Context) error {
 			}
 		}
 
-		_ = s.notifications.CreateNotification(ctx, &domain.Notification{
-			UserID: g.OrganizerID,
-			Kind:   "group_buy_" + string(target),
-			Title:  fmt.Sprintf("Group buy %q %s", g.Title, target),
-			Body:   fmt.Sprintf("%d / %d confirmed at deadline.", g.Confirmed(), g.Threshold),
-		})
+		// Skip notifying when the organiser has been deleted (FK SET NULL).
+		if g.OrganizerID != nil {
+			_ = s.notifications.CreateNotification(ctx, &domain.Notification{
+				UserID: *g.OrganizerID,
+				Kind:   "group_buy_" + string(target),
+				Title:  fmt.Sprintf("Group buy %q %s", g.Title, target),
+				Body:   fmt.Sprintf("%d / %d confirmed at deadline.", g.Confirmed(), g.Threshold),
+			})
+		}
 	}
 	return nil
 }
@@ -241,8 +245,11 @@ func (s *GroupBuyService) notifyOrganizerProgress(ctx context.Context, g *domain
 	if g.Status != domain.GroupBuyMet {
 		return
 	}
+	if g.OrganizerID == nil {
+		return
+	}
 	_ = s.notifications.CreateNotification(ctx, &domain.Notification{
-		UserID: g.OrganizerID,
+		UserID: *g.OrganizerID,
 		Kind:   "group_buy_threshold_met",
 		Title:  fmt.Sprintf("Group buy %q reached its threshold", g.Title),
 		Body:   fmt.Sprintf("%d / %d seats confirmed.", g.Confirmed(), g.Threshold),

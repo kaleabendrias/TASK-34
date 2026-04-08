@@ -91,7 +91,7 @@ templ GroupBuyIndex(username string, buys []domain.GroupBuy) {
 				<div class="card gb-card">
 					<h3 style="margin:0;">
 						<a href={ templ.SafeURL("/group-buys/" + g.ID.String()) }>{ g.Title }</a>
-						&nbsp;<span class={ gbStatusBadge(string(g.Status)) }>{ string(g.Status) }</span>
+						&nbsp;<span class={ gbStatusBadge(string(g.Status)) }>{ HumanLabel(string(g.Status)) }</span>
 					</h3>
 					<p class="gb-meta">{ gbHeadline(g) } · { gbDeadlineHuman(g) }</p>
 					<p>{ fmt.Sprintf("%d / %d confirmed (capacity %d)", g.Confirmed(), g.Threshold, g.Capacity) }</p>
@@ -109,7 +109,7 @@ templ GroupBuyDetail(username string, g domain.GroupBuy, progress *service.Progr
 			.gb-bar-fill { height:100%; background: var(--accent); transition: width 0.3s; }
 			.gb-failed { background: var(--err); }
 		</style>
-		<h2>{ g.Title } &nbsp;<span class={ gbStatusBadge(string(g.Status)) }>{ string(g.Status) }</span></h2>
+		<h2>{ g.Title } &nbsp;<span class={ gbStatusBadge(string(g.Status)) }>{ HumanLabel(string(g.Status)) }</span></h2>
 		<p class="muted">{ gbHeadline(g) } · { gbDeadlineHuman(g) }</p>
 
 		if g.Status == domain.GroupBuyExpired || g.Status == domain.GroupBuyCanceled {

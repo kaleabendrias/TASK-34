@@ -75,7 +75,7 @@ templ NotificationCenter(username string, notifications []domain.Notification, t
 						for _, t := range todos {
 							<div class="nc-row">
 								<strong>{ t.Title }</strong>
-								&nbsp;<span class={ todoBadge(t.Status) }>{ string(t.Status) }</span>
+								&nbsp;<span class={ todoBadge(t.Status) }>{ HumanLabel(string(t.Status)) }</span>
 								<div class="muted" style="font-size:0.8rem;">{ string(t.TaskType) } · { formatDateTime(t.CreatedAt) }</div>
 								<div class="actions">
 									if t.Status == domain.TodoOpen {

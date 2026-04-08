@@ -41,7 +41,10 @@ func (s GroupBuyStatus) IsTerminal() bool {
 type GroupBuy struct {
 	ID             uuid.UUID      `json:"id"`
 	ResourceID     uuid.UUID      `json:"resource_id"`
-	OrganizerID    uuid.UUID      `json:"organizer_id"`
+	// OrganizerID is nullable: the FK uses ON DELETE SET NULL so a group buy
+	// outlives the user that created it. Reads via scanGroupBuy must
+	// therefore tolerate a NULL column value.
+	OrganizerID    *uuid.UUID     `json:"organizer_id,omitempty"`
 	Title          string         `json:"title"`
 	Description    string         `json:"description"`
 	Threshold      int            `json:"threshold"`

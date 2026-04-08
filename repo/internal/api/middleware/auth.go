@@ -54,6 +54,13 @@ func Authenticator(auth *service.AuthService, required bool) gin.HandlerFunc {
 		}
 		c.Set(ctxKeyUser, user)
 		c.Set(ctxKeySession, sess)
+		// Slide the client-side cookie expiry forward in lockstep with the
+		// server-side session. Without this re-set the browser would still
+		// honour the maxAge stamped at login time and drop the cookie before
+		// the 30-minute inactivity window had actually elapsed.
+		settings := auth.Settings()
+		maxAge := int(settings.SessionInactivity.Seconds())
+		c.SetCookie(SessionCookieName, sess.ID, maxAge, "/", "", settings.CookieSecure, true)
 		c.Next()
 	}
 }
@@ -66,6 +73,26 @@ func CurrentUser(c *gin.Context) *domain.User {
 	}
 	u, _ := v.(*domain.User)
 	return u
+}
+
+// RequireAdmin aborts the request with 403 unless the resolved current user
+// has the IsAdmin flag. Compose this AFTER Authenticator(required=true) so a
+// valid session is guaranteed by the time this gate runs. Centralising the
+// check here keeps the rule in one place rather than scattering an
+// `if !u.IsAdmin` clause across every admin handler.
+func RequireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		u := CurrentUser(c)
+		if u == nil {
+			unauthorized(c, "authentication required")
+			return
+		}
+		if !u.IsAdmin {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin only"})
+			return
+		}
+		c.Next()
+	}
 }
 
 // RequireNotBlacklisted is a gate handler that 403s if the current user is on

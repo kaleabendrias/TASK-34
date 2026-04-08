@@ -55,11 +55,11 @@ templ MyBookingsPage(username string, blacklisted bool, blReason string, booking
 							<td>{ formatDateTime(b.StartTime) }</td>
 							<td>{ formatDateTime(b.EndTime) }</td>
 							<td>{ fmt.Sprintf("%d", b.PartySize) }</td>
-							<td><span class={ "badge", string(b.Status) }>{ string(b.Status) }</span></td>
+							<td><span class={ "badge", string(b.Status) }>{ HumanLabel(string(b.Status)) }</span></td>
 							<td class="actions">
 								if !b.Status.IsTerminal() {
 									for _, next := range domain.AllowedNext(b.Status) {
-										<button class="btn-inline" onclick={ transitionScript(b.ID.String(), string(next)) }>{ string(next) }</button>
+										<button class="btn-inline" onclick={ transitionScript(b.ID.String(), string(next)) }>{ HumanLabel(string(next)) }</button>
 									}
 								}
 							</td>

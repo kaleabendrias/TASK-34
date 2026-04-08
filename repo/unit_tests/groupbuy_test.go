@@ -11,10 +11,11 @@ import (
 )
 
 func makeGoodGroupBuy(now time.Time) *domain.GroupBuy {
+	organizer := uuid.New()
 	return &domain.GroupBuy{
 		ID:             uuid.New(),
 		ResourceID:     uuid.New(),
-		OrganizerID:    uuid.New(),
+		OrganizerID:    &organizer,
 		Title:          "Sunset cruise",
 		Threshold:      5,
 		Capacity:       10,

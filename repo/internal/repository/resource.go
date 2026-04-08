@@ -117,11 +117,16 @@ func (r *resourceRepo) InsertManyTx(ctx context.Context, rows []domain.Resource)
 }
 
 func (r *resourceRepo) SumActivePartySizesInWindow(ctx context.Context, resourceID uuid.UUID, start, end time.Time) (int, error) {
+	// Waitlisted bookings deliberately do NOT consume an active seat: a
+	// waitlisted booking is a parking spot for a user who only gets a real
+	// seat once an existing booking is canceled. Counting them here would
+	// double-count capacity and prevent any further pending_confirmation
+	// reservations from being created.
 	const q = `
 		SELECT COALESCE(SUM(party_size), 0)::int
 		FROM bookings
 		WHERE resource_id = $1
-		  AND status IN ('pending_confirmation','waitlisted','checked_in')
+		  AND status IN ('pending_confirmation','checked_in')
 		  AND start_time < $3 AND end_time > $2
 	`
 	var total int

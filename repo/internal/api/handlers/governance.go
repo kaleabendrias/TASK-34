@@ -118,12 +118,8 @@ func (h *GovernanceHandler) CancelDeletion(c *gin.Context) {
 }
 
 // POST /api/admin/import/resources — multipart CSV upload, all-or-nothing.
+// Mounted under /api/admin which is gated by middleware.RequireAdmin().
 func (h *GovernanceHandler) ImportResources(c *gin.Context) {
-	u := middleware.CurrentUser(c)
-	if u == nil || !u.IsAdmin {
-		c.JSON(http.StatusForbidden, gin.H{"error": "admin only"})
-		return
-	}
 	file, _, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "expected multipart 'file' field"})
@@ -147,12 +143,8 @@ func (h *GovernanceHandler) ImportResources(c *gin.Context) {
 }
 
 // GET /api/admin/export/resources.csv
+// Mounted under /api/admin which is gated by middleware.RequireAdmin().
 func (h *GovernanceHandler) ExportResources(c *gin.Context) {
-	u := middleware.CurrentUser(c)
-	if u == nil || !u.IsAdmin {
-		c.JSON(http.StatusForbidden, gin.H{"error": "admin only"})
-		return
-	}
 	c.Header("Content-Type", "text/csv")
 	c.Header("Content-Disposition", `attachment; filename="resources.csv"`)
 	if err := h.svc.ExportResourcesCSV(c.Request.Context(), c.Writer); err != nil {

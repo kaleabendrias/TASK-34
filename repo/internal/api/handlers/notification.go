@@ -121,12 +121,8 @@ func (h *NotificationHandler) UpdateTodoStatus(c *gin.Context) {
 }
 
 // GET /api/admin/notification-deliveries — admin-only delivery audit log.
+// Mounted under /api/admin which is gated by middleware.RequireAdmin().
 func (h *NotificationHandler) AdminDeliveries(c *gin.Context) {
-	u := middleware.CurrentUser(c)
-	if u == nil || !u.IsAdmin {
-		c.JSON(http.StatusForbidden, gin.H{"error": "admin only"})
-		return
-	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
 	out, err := h.svc.AdminDeliveries(c.Request.Context(), limit)
 	if err != nil {

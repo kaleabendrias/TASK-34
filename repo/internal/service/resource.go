@@ -157,6 +157,12 @@ func ComputeSlotCapacities(open, close time.Time, slot time.Duration, capacity i
 			if !b.Status.IsActive() {
 				continue
 			}
+			// Waitlisted bookings are "active" for per-user limits and the
+			// state machine, but they must NOT consume seats here: they only
+			// occupy capacity once they get promoted to pending_confirmation.
+			if b.Status == domain.StatusWaitlisted {
+				continue
+			}
 			if !b.StartTime.Before(end) || !b.EndTime.After(cur) {
 				continue
 			}

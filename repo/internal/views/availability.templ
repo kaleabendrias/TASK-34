@@ -95,7 +95,7 @@ templ AvailabilityPage(username string, resources []domain.Resource, result *ser
 							<tr>
 								<td>{ formatTimeRange(b.StartTime, b.EndTime) }</td>
 								<td>{ fmt.Sprintf("%d", b.PartySize) }</td>
-								<td><span class={ "badge", string(b.Status) }>{ string(b.Status) }</span></td>
+								<td><span class={ "badge", string(b.Status) }>{ HumanLabel(string(b.Status)) }</span></td>
 							</tr>
 						}
 					</tbody>

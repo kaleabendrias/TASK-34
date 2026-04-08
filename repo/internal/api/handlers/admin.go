@@ -14,6 +14,11 @@ import (
 	"github.com/harborworks/booking-hub/internal/service"
 )
 
+// Note: every method below is mounted under /api/admin which is gated by
+// middleware.RequireAdmin(). The handlers therefore no longer need a per-call
+// admin check — by the time execution reaches them the user is guaranteed to
+// be authenticated AND to carry IsAdmin == true.
+
 // AdminHandler exposes operator-only endpoints: cache stats, webhooks,
 // backups, manual job triggers.
 type AdminHandler struct {
@@ -27,33 +32,18 @@ func NewAdminHandler(cache *cache.Cache, webhooks *service.WebhookService, backu
 	return &AdminHandler{cache: cache, webhooks: webhooks, backups: backups, log: log}
 }
 
-func adminGate(c *gin.Context) bool {
-	u := middleware.CurrentUser(c)
-	if u == nil || !u.IsAdmin {
-		c.JSON(http.StatusForbidden, gin.H{"error": "admin only"})
-		return false
-	}
-	return true
-}
-
 // GET /api/admin/cache/stats
 func (h *AdminHandler) CacheStats(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	n, ttl := h.cache.Stats()
 	c.JSON(http.StatusOK, gin.H{
-		"entries": n,
-		"ttl":     ttl.String(),
+		"entries":       n,
+		"ttl":           ttl.String(),
 		"bypass_header": middleware.CacheBypassHeader,
 	})
 }
 
 // POST /api/admin/cache/purge
 func (h *AdminHandler) CachePurge(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	h.cache.Purge()
 	c.JSON(http.StatusOK, gin.H{"status": "purged"})
 }
@@ -69,9 +59,6 @@ type webhookCreateRequest struct {
 }
 
 func (h *AdminHandler) WebhookCreate(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	var req webhookCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -89,9 +76,6 @@ func (h *AdminHandler) WebhookCreate(c *gin.Context) {
 }
 
 func (h *AdminHandler) WebhookList(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	out, err := h.webhooks.List(c.Request.Context())
 	if err != nil {
 		writeServiceError(c, err)
@@ -101,9 +85,6 @@ func (h *AdminHandler) WebhookList(c *gin.Context) {
 }
 
 func (h *AdminHandler) WebhookDisable(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
@@ -117,9 +98,6 @@ func (h *AdminHandler) WebhookDisable(c *gin.Context) {
 }
 
 func (h *AdminHandler) WebhookDeliveries(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	out, err := h.webhooks.Deliveries(c.Request.Context(), limit)
 	if err != nil {
@@ -132,9 +110,6 @@ func (h *AdminHandler) WebhookDeliveries(c *gin.Context) {
 // ---------- backups ----------
 
 func (h *AdminHandler) BackupFull(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	b, err := h.backups.TakeFull(c.Request.Context())
 	if err != nil {
 		writeServiceError(c, err)
@@ -144,9 +119,6 @@ func (h *AdminHandler) BackupFull(c *gin.Context) {
 }
 
 func (h *AdminHandler) BackupIncremental(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	b, err := h.backups.TakeIncremental(c.Request.Context())
 	if err != nil {
 		writeServiceError(c, err)
@@ -156,9 +128,6 @@ func (h *AdminHandler) BackupIncremental(c *gin.Context) {
 }
 
 func (h *AdminHandler) BackupList(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	out, err := h.backups.List(c.Request.Context(), limit)
 	if err != nil {
@@ -173,17 +142,14 @@ func (h *AdminHandler) BackupList(c *gin.Context) {
 // apply step is intentionally omitted from the API: restoring a database is
 // a manual, supervised operation in any environment.
 func (h *AdminHandler) BackupRestorePlan(c *gin.Context) {
-	if !adminGate(c) {
-		return
-	}
 	plan, err := h.backups.PlanRestore(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusFailedDependency, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"steps":      plan,
-		"sla_hours":  4,
-		"detail":     "load each file in order; full first, then incrementals",
+		"steps":     plan,
+		"sla_hours": 4,
+		"detail":    "load each file in order; full first, then incrementals",
 	})
 }

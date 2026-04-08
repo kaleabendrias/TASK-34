@@ -451,7 +451,9 @@ internal/
     jobs/                      background scheduler (single goroutine owner)
   views/                       Templ HTML templates (layout, auth, booking,
                                group, availability)
-migrations/                    golang-migrate SQL files (0001 + 0002)
+migrations/                    golang-migrate SQL files (0001_initial,
+                               0002_groupbuy_governance, 0003_finalization,
+                               0004_hardening)
 seed/                          idempotent reference data
 unit_tests/                    pure-logic Go tests (≥90% scope coverage)
 API_tests/                     end-to-end HTTP tests (≥90% scope coverage)
@@ -692,7 +694,8 @@ Server-side business constraints, all enforced and tested:
 .
 ├── cmd/server/main.go              composition root
 ├── internal/                       all production code
-├── migrations/                     0001_initial + 0002_groupbuy_governance
+├── migrations/                     0001_initial, 0002_groupbuy_governance,
+│                                    0003_finalization, 0004_hardening
 ├── seed/seed.sql                   idempotent reference data
 ├── unit_tests/                     pure-logic Go tests
 ├── API_tests/                      end-to-end HTTP tests

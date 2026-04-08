@@ -81,13 +81,9 @@ func (h *AnalyticsHandler) Trends(c *gin.Context) {
 	})
 }
 
-// GET /api/admin/anomalies
+// GET /api/admin/anomalies — mounted under /api/admin which is gated by
+// middleware.RequireAdmin().
 func (h *AnalyticsHandler) Anomalies(c *gin.Context) {
-	u := middleware.CurrentUser(c)
-	if u == nil || !u.IsAdmin {
-		c.JSON(http.StatusForbidden, gin.H{"error": "admin only"})
-		return
-	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	out, err := h.svc.Anomalies(c.Request.Context(), limit)
 	if err != nil {

@@ -46,6 +46,7 @@ func NewRouter(d Deps) http.Handler {
 	must := middleware.Authenticator(d.Auth, true)
 	notBlacklisted := middleware.RequireNotBlacklisted()
 	rotated := middleware.RequirePasswordRotated()
+	requireAdmin := middleware.RequireAdmin()
 	idem := middleware.Idempotency(d.Idempotency)
 	cacheMW := middleware.ReadThroughCache(d.Cache)
 
@@ -157,7 +158,10 @@ func NewRouter(d Deps) http.Handler {
 		api.POST("/account/delete/cancel", must, rotated, d.GovernanceHandler.CancelDeletion)
 
 		// --- ADMIN ---
-		admin := api.Group("/admin", must, rotated)
+		// requireAdmin sits at the group level so every route below is
+		// guaranteed to have a session AND the IsAdmin flag — handlers
+		// no longer perform per-method admin checks.
+		admin := api.Group("/admin", must, rotated, requireAdmin)
 		{
 			admin.GET("/notification-deliveries", d.NotificationHandler.AdminDeliveries)
 			admin.GET("/anomalies", d.AnalyticsHandler.Anomalies)

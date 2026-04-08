@@ -71,7 +71,7 @@ templ GroupDetail(username string, g domain.GroupReservation) {
 							<td>{ formatDateTime(b.StartTime) }</td>
 							<td>{ formatDateTime(b.EndTime) }</td>
 							<td>{ fmt.Sprintf("%d", b.PartySize) }</td>
-							<td><span class={ "badge", string(b.Status) }>{ string(b.Status) }</span></td>
+							<td><span class={ "badge", string(b.Status) }>{ HumanLabel(string(b.Status)) }</span></td>
 						</tr>
 					}
 				</tbody>

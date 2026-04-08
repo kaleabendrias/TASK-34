@@ -62,8 +62,12 @@ func (r *groupBuyRepo) Create(ctx context.Context, g *domain.GroupBuy) error {
 		                        status, version, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 	`
+	var organizer uuid.NullUUID
+	if g.OrganizerID != nil {
+		organizer = uuid.NullUUID{UUID: *g.OrganizerID, Valid: true}
+	}
 	_, err := r.pool.Exec(ctx, q,
-		g.ID, g.ResourceID, g.OrganizerID, g.Title, g.Description,
+		g.ID, g.ResourceID, organizer, g.Title, g.Description,
 		g.Threshold, g.Capacity, g.RemainingSlots, g.StartsAt, g.EndsAt, g.Deadline,
 		string(g.Status), g.Version, g.CreatedAt, g.UpdatedAt,
 	)
@@ -266,12 +270,19 @@ func scanGroupBuy(s rowScanner) (*domain.GroupBuy, error) {
 		g      domain.GroupBuy
 		status string
 	)
+	// organizer_id is nullable in the schema (ON DELETE SET NULL), so scan
+	// into a pgx-friendly nullable UUID and copy onto the *uuid.UUID field.
+	var organizer uuid.NullUUID
 	if err := s.Scan(
-		&g.ID, &g.ResourceID, &g.OrganizerID, &g.Title, &g.Description,
+		&g.ID, &g.ResourceID, &organizer, &g.Title, &g.Description,
 		&g.Threshold, &g.Capacity, &g.RemainingSlots, &g.StartsAt, &g.EndsAt, &g.Deadline,
 		&status, &g.Version, &g.CreatedAt, &g.UpdatedAt,
 	); err != nil {
 		return nil, err
+	}
+	if organizer.Valid {
+		id := organizer.UUID
+		g.OrganizerID = &id
 	}
 	g.Status = domain.GroupBuyStatus(status)
 	return &g, nil
