@@ -1,0 +1,12 @@
+{
+  "name": "harborworks-e2e",
+  "private": true,
+  "description": "Playwright API-level frontend tests for HarborWorks Booking Hub",
+  "scripts": {
+    "test": "playwright test",
+    "test:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0"
+  }
+}

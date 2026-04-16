@@ -25,11 +25,12 @@ rm -rf "$COVERAGE_DIR"/* "$OUT_DIR"/*
 
 cd /src
 
-UNIT_PKGS='github.com/harborworks/booking-hub/internal/domain,github.com/harborworks/booking-hub/internal/infrastructure/cache,github.com/harborworks/booking-hub/internal/infrastructure/crypto'
+UNIT_PKGS='github.com/harborworks/booking-hub/internal/domain,github.com/harborworks/booking-hub/internal/infrastructure/cache,github.com/harborworks/booking-hub/internal/infrastructure/crypto,github.com/harborworks/booking-hub/internal/api/middleware'
 API_PKG_REGEX='github.com/harborworks/booking-hub/internal/api/(handlers|middleware)'
 
 UNIT_RC=0
 API_RC=0
+E2E_RC=0
 COVERAGE_RC=0
 
 echo "════════════════════════════════════════════════════════════════"
@@ -77,14 +78,27 @@ echo
 ####################################
 # 3. API TESTS
 ####################################
-echo "── [3/4] Running API tests ───────────────────────────────────────"
+echo "── [3/5] Running API tests ───────────────────────────────────────"
 APP_URL="http://${APP_BIND}" go test -count=1 -p=1 ./API_tests/... || API_RC=$?
+echo
+
+####################################
+# 3.5. E2E FRONTEND TESTS (Playwright)
+####################################
+echo "── [4/5] Running E2E frontend tests (Playwright) ────────────────"
+if [ -d /src/e2e ] && command -v npx >/dev/null 2>&1; then
+  APP_URL="http://${APP_BIND}" npx --prefix /src/e2e playwright test \
+    --config /src/e2e/playwright.config.ts 2>&1 || E2E_RC=$?
+  echo "  E2E exit code: ${E2E_RC}"
+else
+  echo "  (E2E tests skipped — npx not available)"
+fi
 echo
 
 ####################################
 # 4. STOP SERVER & COMPUTE COVERAGE
 ####################################
-echo "── [4/4] Stopping server and computing coverage ──────────────────"
+echo "── [5/5] Stopping server and computing coverage ──────────────────"
 kill -TERM "$APP_PID" 2>/dev/null || true
 wait "$APP_PID" 2>/dev/null || true
 
@@ -151,10 +165,11 @@ echo
 echo "Test results"
 echo "  unit suite : $([ $UNIT_RC -eq 0 ] && echo PASS || echo FAIL)"
 echo "  api  suite : $([ $API_RC  -eq 0 ] && echo PASS || echo FAIL)"
+echo "  e2e  suite : $([ $E2E_RC  -eq 0 ] && echo PASS || echo FAIL)"
 
 # Compose final exit code: tests fail with 1, coverage shortfall with 2.
 FINAL_RC=0
-if [ $UNIT_RC -ne 0 ] || [ $API_RC -ne 0 ]; then
+if [ $UNIT_RC -ne 0 ] || [ $API_RC -ne 0 ] || [ $E2E_RC -ne 0 ]; then
   FINAL_RC=1
 elif [ $COVERAGE_RC -ne 0 ]; then
   FINAL_RC=2

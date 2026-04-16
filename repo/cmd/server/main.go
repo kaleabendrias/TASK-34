@@ -120,10 +120,13 @@ func main() {
 	// --- Cache (60s TTL by spec) ---
 	c := cache.New(cache.DefaultTTL)
 
-	// --- Bootstrap admin user ---
+	// --- Bootstrap admin user and demo users ---
 	if cfg.RunSeed {
 		if err := seedAdminUser(ctx, userRepo, logger); err != nil {
 			logger.Warn("admin seed skipped", "error", err)
+		}
+		if err := seedDemoUsers(ctx, userRepo, logger); err != nil {
+			logger.Warn("demo user seed skipped", "error", err)
 		}
 	}
 
@@ -276,6 +279,53 @@ func generateInitialPassword() (string, error) {
 	// chance. Format: <base64 prefix><A1!> guarantees upper/digit/symbol; the
 	// base64 alphabet covers lowercase.
 	return base64.RawURLEncoding.EncodeToString(buf) + "A1!", nil
+}
+
+// seedDemoUsers creates two well-known demo accounts on first boot so that
+// reviewers can log in immediately without having to read a one-time secret
+// file. These accounts use stable, documented passwords and should only be
+// created in environments where RUN_SEED is set (development / review stacks).
+//
+// Credentials (also listed in README.md):
+//   admin    / Admin@Harbor2026!   — is_admin=true
+//   demouser / User@Harbor2026!    — standard user
+func seedDemoUsers(ctx context.Context, repo repository.UserRepository, logger *slog.Logger) error {
+	type demoAccount struct {
+		username string
+		password string
+		isAdmin  bool
+	}
+	accounts := []demoAccount{
+		{"admin", "Admin@Harbor2026!", true},
+		{"demouser", "User@Harbor2026!", false},
+	}
+
+	for _, acc := range accounts {
+		if existing, err := repo.GetByUsername(ctx, acc.username); err == nil && existing != nil {
+			if acc.isAdmin && !existing.IsAdmin {
+				_ = repo.SetAdmin(ctx, existing.ID, true)
+			}
+			continue
+		} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("check %s: %w", acc.username, err)
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(acc.password), bcrypt.DefaultCost)
+		if err != nil {
+			return fmt.Errorf("hash %s: %w", acc.username, err)
+		}
+		u := &domain.User{
+			Username:           acc.username,
+			PasswordHash:       string(hash),
+			IsAdmin:            acc.isAdmin,
+			MustRotatePassword: false,
+		}
+		if err := repo.Create(ctx, u); err != nil {
+			return fmt.Errorf("create %s: %w", acc.username, err)
+		}
+		logger.Info("demo user seeded", "username", acc.username, "is_admin", acc.isAdmin)
+	}
+	return nil
 }
 
 // pool variable kept exported for any future helpers needing direct DB access.
